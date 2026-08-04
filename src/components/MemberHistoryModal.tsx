@@ -43,14 +43,13 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   const [editMode, setEditMode] = useState<string>('Cash');
   const [editRemarks, setEditRemarks] = useState<string>('');
 
-  if (!isOpen || !member) return null;
-
   // All Income transactions for this member sorted chronologically
   const allMemberTxns = useMemo(() => {
+    if (!member) return [];
     return transactions
       .filter((t) => t.type === 'Income' && String(t.ledgerNo).trim() === String(member.ledgerNo).trim())
       .sort((a, b) => a.date.localeCompare(b.date)); // Oldest first
-  }, [transactions, member.ledgerNo]);
+  }, [transactions, member?.ledgerNo]);
 
   // Extract available years & heads
   const availableYears = useMemo(() => {
@@ -110,7 +109,12 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   }, [txnsWithRunningTotal, selectedYear, selectedHead, searchQuery]);
 
   // Member overall statistics
-  const totals = calculateMemberTotals(transactions, member.ledgerNo);
+  const totals = useMemo(() => {
+    if (!member) return { totalPaid: 0, count: 0, lastPaymentDate: null };
+    return calculateMemberTotals(transactions, member.ledgerNo);
+  }, [transactions, member?.ledgerNo]);
+
+  if (!isOpen || !member) return null;
 
   const handleStartEdit = (txn: Transaction) => {
     setEditingTxn(txn);
