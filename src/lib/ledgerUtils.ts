@@ -54,9 +54,34 @@ export function normalizeName(s: string): string {
   return String(s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
-export function findMember(members: Member[], ledgerNo: string): Member | undefined {
-  const v = String(ledgerNo || '').trim();
-  return members.find(m => String(m.ledgerNo).trim() === v);
+export function findMember(members: Member[], query: string): Member | undefined {
+  if (!query) return undefined;
+  const q = String(query).trim().toLowerCase();
+  if (!q) return undefined;
+
+  // 1. Exact or case-insensitive string match on ledgerNo
+  let match = members.find((m) => String(m.ledgerNo).trim().toLowerCase() === q);
+  if (match) return match;
+
+  // 2. Numeric match on ledgerNo (e.g. "041" vs "41")
+  const numQ = parseInt(q, 10);
+  if (!isNaN(numQ)) {
+    match = members.find((m) => parseInt(String(m.ledgerNo).trim(), 10) === numQ);
+    if (match) return match;
+  }
+
+  // 3. Match by member name
+  match = members.find((m) => m.name.trim().toLowerCase() === q);
+  if (match) return match;
+
+  // 4. Match by normalized member name
+  const normQ = normalizeName(q);
+  if (normQ) {
+    match = members.find((m) => normalizeName(m.name).toLowerCase() === normQ.toLowerCase());
+    if (match) return match;
+  }
+
+  return undefined;
 }
 
 export function calculateMemberTotals(transactions: Transaction[], ledgerNo: string): MemberTotals {

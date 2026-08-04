@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Transaction, Member, TransactionType } from '../types';
-import { INCOME_HEADS, EXPENDITURE_HEADS, todayISO, fmtDate, formatMoney, num, uid, normalizeName, parseExcelDate, parseUniversalFileImport } from '../lib/ledgerUtils';
+import { INCOME_HEADS, EXPENDITURE_HEADS, todayISO, fmtDate, formatMoney, num, uid, normalizeName, parseExcelDate, parseUniversalFileImport, findMember } from '../lib/ledgerUtils';
 import * as XLSX from 'xlsx';
 import { PlusCircle, Search, Filter, Download, FileSpreadsheet, Upload, Edit, Trash2, CheckCircle2, AlertCircle, X } from 'lucide-react';
 
@@ -46,9 +46,9 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
 
   // Member Match
   const matchedMember = useMemo(() => {
-    if (!ledgerNo.trim()) return null;
-    return members.find((m) => String(m.ledgerNo).trim() === ledgerNo.trim());
-  }, [ledgerNo, members]);
+    if (!ledgerNo.trim() && !memberName.trim()) return null;
+    return findMember(members, ledgerNo) || findMember(members, memberName);
+  }, [ledgerNo, memberName, members]);
 
   const handleTypeChange = (newType: TransactionType) => {
     setTxnType(newType);
@@ -57,11 +57,25 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
 
   const handleLedgerNoChange = (val: string) => {
     setLedgerNo(val);
-    const m = members.find((x) => String(x.ledgerNo).trim() === val.trim());
+    if (!val.trim()) return;
+    const m = findMember(members, val);
     if (m) {
       setMemberName(m.name);
-    } else {
-      setMemberName('');
+      if (!amount && m.monthlyDue) {
+        setAmount(String(m.monthlyDue));
+      }
+    }
+  };
+
+  const handleMemberNameChange = (val: string) => {
+    setMemberName(val);
+    if (!val.trim()) return;
+    const m = findMember(members, val);
+    if (m) {
+      setLedgerNo(m.ledgerNo);
+      if (!amount && m.monthlyDue) {
+        setAmount(String(m.monthlyDue));
+      }
     }
   };
 
@@ -318,8 +332,16 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
                   placeholder="e.g. 41"
                   value={ledgerNo}
                   onChange={(e) => handleLedgerNoChange(e.target.value)}
+                  list="ledger-no-list"
                   className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-white"
                 />
+                <datalist id="ledger-no-list">
+                  {members.map((m) => (
+                    <option key={m.ledgerNo} value={m.ledgerNo}>
+                      {m.ledgerNo} — {m.name}
+                    </option>
+                  ))}
+                </datalist>
               </div>
 
               <div>
@@ -328,9 +350,17 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
                   type="text"
                   placeholder="e.g. Mohammad Shafi"
                   value={memberName}
-                  onChange={(e) => setMemberName(e.target.value)}
+                  onChange={(e) => handleMemberNameChange(e.target.value)}
+                  list="member-name-list"
                   className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-white"
                 />
+                <datalist id="member-name-list">
+                  {members.map((m) => (
+                    <option key={m.ledgerNo} value={m.name}>
+                      {m.name} (Ledger #{m.ledgerNo})
+                    </option>
+                  ))}
+                </datalist>
               </div>
 
               <div>
@@ -345,14 +375,32 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
             </div>
 
             {matchedMember ? (
-              <p className="text-[11px] text-emerald-700 flex items-center gap-1 font-medium">
-                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600" />
-                Matched Member: {matchedMember.name} (Monthly Subscription: {formatMoney(matchedMember.monthlyDue)})
-              </p>
+              <div className="flex flex-wrap items-center justify-between gap-2 bg-emerald-50/90 border border-emerald-200 rounded-lg p-2.5 text-xs text-emerald-950 font-medium">
+                <div className="flex items-center gap-2">
+                  <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                  <span>
+                    <strong>Autofetched Member:</strong> {matchedMember.name} (Ledger #{matchedMember.ledgerNo})
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <span className="bg-emerald-100 text-emerald-800 text-[11px] font-bold px-2 py-0.5 rounded-md">
+                    Monthly Subscription: {formatMoney(matchedMember.monthlyDue)}
+                  </span>
+                  {!amount && (
+                    <button
+                      type="button"
+                      onClick={() => setAmount(String(matchedMember.monthlyDue))}
+                      className="text-[11px] font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+                    >
+                      Fill Rs. {matchedMember.monthlyDue}
+                    </button>
+                  )}
+                </div>
+              </div>
             ) : ledgerNo ? (
               <p className="text-[11px] text-amber-700 flex items-center gap-1 font-medium">
                 <AlertCircle className="w-3.5 h-3.5 text-amber-600" />
-                No existing member matched with ledger no. {ledgerNo}. Type name manually above.
+                No existing member matched with ledger no. #{ledgerNo}. Type member name manually.
               </p>
             ) : null}
           </div>

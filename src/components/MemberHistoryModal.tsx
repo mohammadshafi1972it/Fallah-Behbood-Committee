@@ -1,12 +1,14 @@
-import React, { useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Member, Transaction } from '../types';
-import { fmtDate, formatMoney, calculateMemberTotals } from '../lib/ledgerUtils';
-import { X, Printer, Download, FileText } from 'lucide-react';
+import { fmtDate, formatMoney, calculateMemberTotals, exportCsv, findMember } from '../lib/ledgerUtils';
+import { X, Printer, Download, FileText, Search, Filter, ArrowRightLeft, Calendar } from 'lucide-react';
 
 interface MemberHistoryModalProps {
   isOpen: boolean;
   onClose: () => void;
   member: Member | null;
+  allMembers?: Member[];
+  onSelectMember?: (member: Member) => void;
   transactions: Transaction[];
   organizationName: string;
 }
@@ -15,33 +17,115 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   isOpen,
   onClose,
   member,
+  allMembers = [],
+  onSelectMember,
   transactions,
   organizationName,
 }) => {
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
+  const [selectedYear, setSelectedYear] = useState<string>('All');
+  const [selectedHead, setSelectedHead] = useState<string>('All');
+  const [searchQuery, setSearchQuery] = useState<string>('');
 
   if (!isOpen || !member) return null;
 
-  const memberTxns = transactions
-    .filter((t) => t.type === 'Income' && String(t.ledgerNo).trim() === String(member.ledgerNo).trim())
-    .sort((a, b) => b.date.localeCompare(a.date));
+  // All Income transactions for this member sorted chronologically
+  const allMemberTxns = useMemo(() => {
+    return transactions
+      .filter((t) => t.type === 'Income' && String(t.ledgerNo).trim() === String(member.ledgerNo).trim())
+      .sort((a, b) => a.date.localeCompare(b.date)); // Oldest first
+  }, [transactions, member.ledgerNo]);
 
+  // Extract available years & heads
+  const availableYears = useMemo(() => {
+    const years = new Set<string>();
+    allMemberTxns.forEach((t) => {
+      if (t.date && t.date.length >= 4) {
+        years.add(t.date.substring(0, 4));
+      }
+    });
+    return Array.from(years).sort().reverse();
+  }, [allMemberTxns]);
+
+  const availableHeads = useMemo(() => {
+    const heads = new Set<string>();
+    allMemberTxns.forEach((t) => {
+      if (t.head) heads.add(t.head);
+    });
+    return Array.from(heads).sort();
+  }, [allMemberTxns]);
+
+  // Calculate Running Cumulative Paid on chronologically sorted list
+  const txnsWithRunningTotal = useMemo(() => {
+    let running = 0;
+    return allMemberTxns.map((t) => {
+      running += t.amount || 0;
+      return {
+        ...t,
+        runningTotal: running,
+      };
+    });
+  }, [allMemberTxns]);
+
+  // Filtered transactions for display (Newest first)
+  const filteredDisplayTxns = useMemo(() => {
+    let list = txnsWithRunningTotal.slice();
+
+    if (selectedYear !== 'All') {
+      list = list.filter((t) => t.date.startsWith(selectedYear));
+    }
+
+    if (selectedHead !== 'All') {
+      list = list.filter((t) => t.head === selectedHead);
+    }
+
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase();
+      list = list.filter(
+        (t) =>
+          (t.receiptVoucherNo || '').toLowerCase().includes(q) ||
+          (t.head || '').toLowerCase().includes(q) ||
+          (t.forMonth || '').toLowerCase().includes(q) ||
+          (t.particulars || '').toLowerCase().includes(q)
+      );
+    }
+
+    return list.reverse(); // Display newest first
+  }, [txnsWithRunningTotal, selectedYear, selectedHead, searchQuery]);
+
+  // Member overall statistics
   const totals = calculateMemberTotals(transactions, member.ledgerNo);
+
+  const handleExportCSV = () => {
+    const headers = ['Date', 'Receipt/Voucher No', 'Fund / Head', 'For Month', 'Particulars', 'Payment Mode', 'Amount (Rs.)', 'Cumulative Total (Rs.)'];
+    const rows = filteredDisplayTxns.map((t) => [
+      fmtDate(t.date),
+      t.receiptVoucherNo || '—',
+      t.head,
+      t.forMonth || '—',
+      t.particulars || '—',
+      t.mode || 'Cash',
+      t.amount,
+      t.runningTotal,
+    ]);
+    exportCsv(headers, rows, `Member_Payment_History_Ledger_${member.ledgerNo}_${member.name.replace(/\s+/g, '_')}.csv`);
+  };
 
   const handlePrintPDF = () => {
     const printWindow = window.open('', '_blank');
     if (!printWindow) return;
 
-    const rows = memberTxns
+    const rows = filteredDisplayTxns
       .map(
         (t) => `
       <tr>
-        <td>${fmtDate(t.date)}</td>
+        <td style="text-align: center;">${fmtDate(t.date)}</td>
+        <td style="text-align: center;">${t.receiptVoucherNo || '—'}</td>
         <td>${t.head}</td>
-        <td>${t.forMonth || '—'}</td>
-        <td>${formatMoney(t.amount)}</td>
-        <td>${t.receiptVoucherNo || '—'}</td>
+        <td style="text-align: center;">${t.forMonth || '—'}</td>
         <td>${t.mode || 'Cash'}</td>
+        <td style="text-align: right; font-weight: bold;">${formatMoney(t.amount)}</td>
+        <td style="text-align: right; color: #166534;">${formatMoney(t.runningTotal)}</td>
       </tr>
     `
       )
@@ -51,45 +135,67 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
       <!DOCTYPE html>
       <html>
       <head>
-        <title>Member History — ${member.name}</title>
+        <title>Member Ledger History — ${member.name} (#${member.ledgerNo})</title>
         <style>
           @page { size: A4 ${orientation}; margin: 15mm; }
           body { font-family: 'Times New Roman', serif; color: #111; margin: 0; padding: 10px; }
-          h1 { font-size: 18pt; text-align: center; margin: 0 0 4px; color: #1F3A5F; }
-          .sub { text-align: center; font-size: 11pt; color: #555; margin-bottom: 20px; }
-          .meta { font-size: 11pt; margin-bottom: 15px; line-height: 1.6; border-bottom: 1px solid #ddd; padding-bottom: 10px; }
-          table { width: 100%; border-collapse: collapse; font-size: 10pt; margin-top: 10px; }
-          th, td { border: 1px solid #999; padding: 6px 8px; text-align: left; }
-          th { background-color: #f2f2f2; }
-          .footer { margin-top: 25px; text-align: right; font-size: 8.5pt; color: #777; }
+          .header { text-align: center; border-bottom: 2px solid #1e293b; padding-bottom: 12px; margin-bottom: 15px; }
+          h1 { font-size: 18pt; margin: 0 0 4px; color: #0f172a; text-transform: uppercase; letter-spacing: 0.5px; }
+          .sub { font-size: 11pt; color: #475569; font-weight: bold; }
+          .meta-grid { display: flex; justify-content: space-between; background-color: #f8fafc; border: 1px solid #cbd5e1; border-radius: 6px; padding: 12px; font-size: 10pt; margin-bottom: 15px; }
+          .meta-item { line-height: 1.5; }
+          table { width: 100%; border-collapse: collapse; font-size: 9.5pt; margin-top: 10px; }
+          th, td { border: 1px solid #94a3b8; padding: 6px 8px; }
+          th { background-color: #0f172a; color: #ffffff; text-transform: uppercase; font-size: 8.5pt; letter-spacing: 0.5px; }
+          tr:nth-child(even) { background-color: #f8fafc; }
+          .summary-box { font-size: 10pt; font-weight: bold; margin-top: 15px; text-align: right; border-top: 2px dashed #94a3b8; padding-top: 8px; }
+          .footer { margin-top: 30px; text-align: right; font-size: 8.5pt; color: #64748b; border-top: 1px solid #e2e8f0; padding-top: 6px; }
         </style>
       </head>
       <body>
-        <h1>${organizationName || 'Fallah Behbood Committee'}</h1>
-        <div class="sub">Member Payment History Ledger</div>
-        <div class="meta">
-          <strong>Ledger No:</strong> ${member.ledgerNo} &nbsp;&nbsp;&nbsp;
-          <strong>Member Name:</strong> ${member.name}<br/>
-          <strong>Monthly Due Rate:</strong> ${formatMoney(member.monthlyDue)} &nbsp;&nbsp;&nbsp;
-          <strong>Total Paid:</strong> ${formatMoney(totals.totalPaid)} &nbsp;&nbsp;&nbsp;
-          <strong>Total Payment Entries:</strong> ${totals.count}
+        <div class="header">
+          <h1>${organizationName || 'Fallah Behbood Committee'}</h1>
+          <div class="sub">MEMBER PAYMENT HISTORY STATEMENT</div>
         </div>
+
+        <div class="meta-grid">
+          <div class="meta-item">
+            <strong>Ledger Folio No:</strong> #${member.ledgerNo}<br/>
+            <strong>Member Name:</strong> ${member.name}<br/>
+            <strong>Monthly Subscription Rate:</strong> ${formatMoney(member.monthlyDue)}
+          </div>
+          <div class="meta-item" style="text-align: right;">
+            <strong>Total Subscription Receipts:</strong> ${totals.count} entries<br/>
+            <strong>Cumulative Total Paid:</strong> <span style="color: #166534; font-size: 11pt;">${formatMoney(totals.totalPaid)}</span><br/>
+            <strong>Statement Date:</strong> ${fmtDate(new Date().toISOString().slice(0, 10))}
+          </div>
+        </div>
+
         <table>
           <thead>
             <tr>
-              <th>Date</th>
+              <th style="width: 12%;">Date</th>
+              <th style="width: 13%;">Voucher #</th>
               <th>Fund / Head</th>
-              <th>For Month</th>
-              <th>Amount</th>
-              <th>Receipt No</th>
-              <th>Mode</th>
+              <th style="width: 12%;">For Month</th>
+              <th style="width: 12%;">Mode</th>
+              <th style="width: 15%; text-align: right;">Amount (Rs.)</th>
+              <th style="width: 18%; text-align: right;">Cumulative (Rs.)</th>
             </tr>
           </thead>
           <tbody>
-            ${rows || '<tr><td colspan="6" style="text-align:center;">No payment records found.</td></tr>'}
+            ${rows || '<tr><td colspan="7" style="text-align:center; padding: 15px;">No payment records found.</td></tr>'}
           </tbody>
         </table>
-        <div class="footer">Generated on ${fmtDate(new Date().toISOString().slice(0, 10))}</div>
+
+        <div class="summary-box">
+          Total Recorded Member Contributions: ${formatMoney(totals.totalPaid)}
+        </div>
+
+        <div class="footer">
+          Generated automatically by Accounting System on ${new Date().toLocaleString()}
+        </div>
+
         <script>
           window.onload = function() { window.print(); }
         </script>
@@ -102,68 +208,174 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
-      <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-2xl w-full p-6 relative">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-4 overflow-y-auto">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-4xl w-full p-6 relative">
+        {/* Close Button */}
         <button
           onClick={onClose}
-          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100"
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 cursor-pointer transition-colors"
         >
           <X className="w-5 h-5" />
         </button>
 
-        <div className="flex items-center gap-3 border-b border-slate-100 pb-4 mb-4">
-          <div className="p-2.5 bg-amber-50 text-amber-800 rounded-xl">
-            <FileText className="w-6 h-6" />
+        {/* Header with Quick Member Switcher */}
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-100 pb-4 mb-4">
+          <div className="flex items-center gap-3">
+            <div className="p-3 bg-amber-500 text-white rounded-xl shadow-xs">
+              <FileText className="w-6 h-6" />
+            </div>
+            <div>
+              <div className="flex items-center gap-2">
+                <h2 className="text-xl font-bold text-slate-900">{member.name}</h2>
+                <span className="bg-slate-100 text-slate-800 text-xs font-mono font-bold px-2.5 py-0.5 rounded-md border border-slate-200">
+                  Ledger #{member.ledgerNo}
+                </span>
+              </div>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Complete Member Payment & Contribution History Statement
+              </p>
+            </div>
           </div>
-          <div>
-            <h2 className="text-lg font-bold text-slate-800">{member.name}</h2>
-            <p className="text-xs text-slate-500 font-mono">Ledger No. {member.ledgerNo}</p>
+
+          {/* Quick Member Switcher Dropdown */}
+          {allMembers.length > 0 && onSelectMember && (
+            <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-xl p-1.5 self-start sm:self-auto">
+              <ArrowRightLeft className="w-4 h-4 text-slate-400 ml-1.5 shrink-0" />
+              <select
+                value={member.ledgerNo}
+                onChange={(e) => {
+                  const m = findMember(allMembers, e.target.value);
+                  if (m) onSelectMember(m);
+                }}
+                className="text-xs font-semibold text-slate-800 bg-transparent focus:outline-none pr-2 cursor-pointer max-w-[200px]"
+              >
+                {allMembers
+                  .slice()
+                  .sort((a, b) => (parseInt(a.ledgerNo, 10) || 0) - (parseInt(b.ledgerNo, 10) || 0))
+                  .map((m) => (
+                    <option key={m.ledgerNo} value={m.ledgerNo}>
+                      #{m.ledgerNo} - {m.name}
+                    </option>
+                  ))}
+              </select>
+            </div>
+          )}
+        </div>
+
+        {/* Member Statistics Summary */}
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/80 p-4 rounded-xl border border-slate-200/80 mb-5">
+          <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Monthly Subscription</span>
+            <span className="text-sm font-bold text-slate-800 font-mono mt-0.5 block">{formatMoney(member.monthlyDue)}</span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-emerald-100 shadow-2xs">
+            <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">Total Paid (All Heads)</span>
+            <span className="text-sm font-bold text-emerald-800 font-mono mt-0.5 block">{formatMoney(totals.totalPaid)}</span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Total Payment Vouchers</span>
+            <span className="text-sm font-bold text-slate-800 font-mono mt-0.5 block">{totals.count} Entries</span>
+          </div>
+
+          <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-2xs">
+            <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Last Payment Recorded</span>
+            <span className="text-xs font-bold text-slate-700 mt-1 block">
+              {totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : 'No payments'}
+            </span>
           </div>
         </div>
 
-        {/* Member Summary Card */}
-        <div className="grid grid-cols-3 gap-3 bg-slate-50 p-3.5 rounded-xl border border-slate-100 text-center mb-4">
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Monthly Rate</span>
-            <span className="text-sm font-bold text-slate-800 font-mono">{formatMoney(member.monthlyDue)}</span>
+        {/* Search & Filter Toolbar */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
+          <div className="relative flex-1">
+            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-2.5" />
+            <input
+              type="text"
+              placeholder="Filter by voucher #, month, fund head..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-white"
+            />
           </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Total Paid</span>
-            <span className="text-sm font-bold text-emerald-700 font-mono">{formatMoney(totals.totalPaid)}</span>
-          </div>
-          <div>
-            <span className="text-[10px] text-slate-500 uppercase tracking-wider block">Entries</span>
-            <span className="text-sm font-bold text-slate-800 font-mono">{totals.count}</span>
+
+          <div className="flex items-center gap-2">
+            {/* Year Filter */}
+            {availableYears.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg text-xs">
+                <Calendar className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-500 font-medium">Year:</span>
+                <select
+                  value={selectedYear}
+                  onChange={(e) => setSelectedYear(e.target.value)}
+                  className="bg-transparent font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                >
+                  <option value="All">All Years</option>
+                  {availableYears.map((y) => (
+                    <option key={y} value={y}>
+                      {y}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            {/* Head Filter */}
+            {availableHeads.length > 0 && (
+              <div className="flex items-center gap-1.5 bg-white border border-slate-200 px-2.5 py-1.5 rounded-lg text-xs">
+                <Filter className="w-3.5 h-3.5 text-slate-400" />
+                <span className="text-slate-500 font-medium">Head:</span>
+                <select
+                  value={selectedHead}
+                  onChange={(e) => setSelectedHead(e.target.value)}
+                  className="bg-transparent font-semibold text-slate-800 focus:outline-none cursor-pointer"
+                >
+                  <option value="All">All Heads</option>
+                  {availableHeads.map((h) => (
+                    <option key={h} value={h}>
+                      {h}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
           </div>
         </div>
 
         {/* History Table */}
-        <div className="border border-slate-200 rounded-xl overflow-hidden max-h-64 overflow-y-auto mb-4">
+        <div className="border border-slate-200 rounded-xl overflow-hidden max-h-72 overflow-y-auto mb-5 shadow-2xs">
           <table className="w-full text-left text-xs font-mono">
-            <thead className="bg-slate-800 text-white font-serif uppercase tracking-wider text-[10px]">
+            <thead className="bg-slate-900 text-slate-200 font-serif uppercase tracking-wider text-[10px] sticky top-0 z-10">
               <tr>
                 <th className="py-2.5 px-3">Date</th>
+                <th className="py-2.5 px-3">Voucher #</th>
                 <th className="py-2.5 px-3">Fund / Head</th>
-                <th className="py-2.5 px-3">Amount</th>
                 <th className="py-2.5 px-3">For Month</th>
-                <th className="py-2.5 px-3">Receipt No</th>
+                <th className="py-2.5 px-3">Mode</th>
+                <th className="py-2.5 px-3 text-right">Amount (Rs.)</th>
+                <th className="py-2.5 px-3 text-right">Cumulative Total</th>
               </tr>
             </thead>
-            <tbody className="divide-y divide-slate-100">
-              {memberTxns.length === 0 ? (
+            <tbody className="divide-y divide-slate-100 bg-white">
+              {filteredDisplayTxns.length === 0 ? (
                 <tr>
-                  <td colSpan={5} className="py-8 text-center text-slate-400 font-sans">
-                    No subscription entries recorded for this member yet.
+                  <td colSpan={7} className="py-10 text-center text-slate-400 font-sans">
+                    {searchQuery || selectedYear !== 'All' || selectedHead !== 'All'
+                      ? 'No payments matching the selected filters.'
+                      : 'No payment transactions recorded for this member yet.'}
                   </td>
                 </tr>
               ) : (
-                memberTxns.map((t) => (
-                  <tr key={t.id} className="hover:bg-slate-50">
-                    <td className="py-2 px-3">{fmtDate(t.date)}</td>
-                    <td className="py-2 px-3 font-sans text-slate-700">{t.head}</td>
-                    <td className="py-2 px-3 font-bold text-slate-900">{formatMoney(t.amount)}</td>
-                    <td className="py-2 px-3 text-slate-500">{t.forMonth || '—'}</td>
-                    <td className="py-2 px-3 text-slate-500">{t.receiptVoucherNo || '—'}</td>
+                filteredDisplayTxns.map((t) => (
+                  <tr key={t.id} className="hover:bg-amber-50/40 transition-colors">
+                    <td className="py-2 px-3 text-slate-700 whitespace-nowrap">{fmtDate(t.date)}</td>
+                    <td className="py-2 px-3 font-mono text-slate-500">{t.receiptVoucherNo || '—'}</td>
+                    <td className="py-2 px-3 font-sans font-medium text-slate-900">{t.head}</td>
+                    <td className="py-2 px-3 text-slate-600 font-sans">{t.forMonth || '—'}</td>
+                    <td className="py-2 px-3 text-slate-500 font-sans">{t.mode || 'Cash'}</td>
+                    <td className="py-2 px-3 text-right font-bold text-slate-900">{formatMoney(t.amount)}</td>
+                    <td className="py-2 px-3 text-right font-bold text-emerald-800">{formatMoney(t.runningTotal)}</td>
                   </tr>
                 ))
               )}
@@ -171,10 +383,10 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
           </table>
         </div>
 
-        {/* Modal Actions */}
-        <div className="flex flex-wrap items-center justify-between gap-3 pt-3 border-t border-slate-100">
+        {/* Footer Actions */}
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 pt-3 border-t border-slate-100">
           <div className="flex items-center gap-3 text-xs">
-            <span className="text-slate-500 font-medium">Page Orientation:</span>
+            <span className="text-slate-500 font-medium">Print Layout:</span>
             <label className="inline-flex items-center gap-1 cursor-pointer">
               <input
                 type="radio"
@@ -201,15 +413,22 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
 
           <div className="flex items-center gap-2">
             <button
+              onClick={handleExportCSV}
+              className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+            >
+              <Download className="w-3.5 h-3.5 text-slate-600" />
+              <span>Export CSV</span>
+            </button>
+            <button
               onClick={handlePrintPDF}
-              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-900 text-white text-xs font-semibold rounded-lg transition-colors shadow-xs cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Print / Download PDF</span>
+              <span>Print / PDF Statement</span>
             </button>
             <button
               onClick={onClose}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors"
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
             >
               Close
             </button>

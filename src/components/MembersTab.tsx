@@ -1,10 +1,10 @@
 import React, { useState, useMemo } from 'react';
-import { Member, Transaction } from '../types';
+import { Member, Transaction, ContributionItem } from '../types';
 import { calculateMemberTotals, formatMoney, num, normalizeName, exportCsv, fmtDate, INCOME_HEADS, calculateContributionsForMonth, findMember, parseUniversalFileImport } from '../lib/ledgerUtils';
 import { MemberHistoryModal } from './MemberHistoryModal';
 import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 import * as XLSX from 'xlsx';
-import { Users, UserPlus, Upload, Search, Download, Printer, History, Trash2, RefreshCw, CheckCircle2, AlertCircle, Bell } from 'lucide-react';
+import { Users, UserPlus, Upload, Search, Download, Printer, History, Trash2, RefreshCw, CheckCircle2, AlertCircle, Bell, Filter } from 'lucide-react';
 
 interface MembersTabProps {
   members: Member[];
@@ -29,6 +29,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   const [name, setName] = useState<string>('');
   const [monthlyDue, setMonthlyDue] = useState<string>('150');
   const [searchQuery, setSearchQuery] = useState<string>('');
+  const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Partial' | 'Due'>('All');
 
   // PDF orientation preference
   const [pdfOrientation, setPdfOrientation] = useState<'portrait' | 'landscape'>('portrait');
@@ -104,20 +105,40 @@ export const MembersTab: React.FC<MembersTabProps> = ({
     e.target.value = '';
   };
 
-  // Filtered members
-  const filteredMembers = useMemo(() => {
-    const q = searchQuery.trim().toLowerCase();
-    const list = members.slice().sort((a, b) => (parseInt(a.ledgerNo, 10) || 0) - (parseInt(b.ledgerNo, 10) || 0));
-    if (!q) return list;
-    return list.filter((m) => (m.name + ' ' + m.ledgerNo).toLowerCase().includes(q));
-  }, [members, searchQuery]);
-
   // Current Month Overdue Contributions Calculation
   const currentMonth = useMemo(() => new Date().toISOString().slice(0, 7), []);
 
   const currentMonthContributions = useMemo(() => {
     return calculateContributionsForMonth(members, transactions, reminderMonth || currentMonth);
   }, [members, transactions, reminderMonth, currentMonth]);
+
+  const currentMonthContributionsMap = useMemo(() => {
+    const map = new Map<string, ContributionItem>();
+    currentMonthContributions.forEach((c) => {
+      map.set(String(c.ledgerNo).trim(), c);
+    });
+    return map;
+  }, [currentMonthContributions]);
+
+  // Filtered members
+  const filteredMembers = useMemo(() => {
+    const q = searchQuery.trim().toLowerCase();
+    let list = members.slice().sort((a, b) => (parseInt(a.ledgerNo, 10) || 0) - (parseInt(b.ledgerNo, 10) || 0));
+
+    if (q) {
+      list = list.filter((m) => (m.name + ' ' + m.ledgerNo).toLowerCase().includes(q));
+    }
+
+    if (statusFilter !== 'All') {
+      list = list.filter((m) => {
+        const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
+        const st = contrib?.status || 'Due';
+        return st === statusFilter;
+      });
+    }
+
+    return list;
+  }, [members, searchQuery, statusFilter, currentMonthContributionsMap]);
 
   const overdueMembersList = useMemo<OverdueMemberItem[]>(() => {
     return currentMonthContributions
@@ -142,10 +163,13 @@ export const MembersTab: React.FC<MembersTabProps> = ({
       return;
     }
     exportCsv(
-      ['Ledger No.', 'Member Name', 'Monthly Due (Rs.)', 'Total Paid (Rs.)', 'Payment Count', 'Last Payment Date'],
+      ['Ledger No.', 'Member Name', 'Monthly Due (Rs.)', 'Payment Status', 'Total Paid (Rs.)', 'Payment Count', 'Last Payment Date'],
       filteredMembers.map((m) => {
         const t = calculateMemberTotals(transactions, m.ledgerNo);
-        return [m.ledgerNo, m.name, m.monthlyDue, t.totalPaid, t.count, t.lastPaymentDate ? fmtDate(t.lastPaymentDate) : '—'];
+        const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
+        const st = contrib?.status || 'Due';
+        const statusText = st === 'Paid' ? 'Fully Paid' : st === 'Partial' ? `Partial (${formatMoney(contrib?.paid || 0)})` : 'Overdue';
+        return [m.ledgerNo, m.name, m.monthlyDue, statusText, t.totalPaid, t.count, t.lastPaymentDate ? fmtDate(t.lastPaymentDate) : '—'];
       }),
       'Fallah_Behbood_Members_Directory.csv'
     );
@@ -164,11 +188,15 @@ export const MembersTab: React.FC<MembersTabProps> = ({
     const rows = filteredMembers
       .map((m) => {
         const t = calculateMemberTotals(transactions, m.ledgerNo);
+        const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
+        const st = contrib?.status || 'Due';
+        const statusText = st === 'Paid' ? 'Fully Paid' : st === 'Partial' ? `Partial (${formatMoney(contrib?.paid || 0)})` : 'Overdue';
         return `
         <tr>
           <td>${m.ledgerNo}</td>
           <td style="font-weight:600;">${m.name}</td>
           <td>${formatMoney(m.monthlyDue)}</td>
+          <td>${statusText}</td>
           <td>${formatMoney(t.totalPaid)}</td>
           <td>${t.count}</td>
           <td>${t.lastPaymentDate ? fmtDate(t.lastPaymentDate) : '—'}</td>
@@ -202,6 +230,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
               <th>Ledger No</th>
               <th>Member Name</th>
               <th>Monthly Due</th>
+              <th>Payment Status</th>
               <th>Total Paid</th>
               <th>Entries</th>
               <th>Last Payment</th>
@@ -337,6 +366,39 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         </div>
       </form>
 
+      {/* Quick Member Payment History Lookup Card */}
+      <div className="bg-slate-900 text-white border border-slate-800 rounded-xl p-4 shadow-sm flex flex-col md:flex-row items-start md:items-center justify-between gap-4">
+        <div>
+          <h3 className="text-sm font-bold flex items-center gap-2 font-serif text-amber-400">
+            <History className="w-4 h-4 text-amber-400" />
+            <span>Member Payment History Lookup</span>
+          </h3>
+          <p className="text-xs text-slate-300 mt-0.5">
+            Select any member to inspect their complete payment history, running balances, receipts, and print PDF statements.
+          </p>
+        </div>
+        <div className="flex items-center gap-2 w-full md:w-auto">
+          <select
+            onChange={(e) => {
+              const m = findMember(members, e.target.value);
+              if (m) setSelectedHistoryMember(m);
+            }}
+            defaultValue=""
+            className="w-full md:w-64 bg-slate-800 text-slate-100 border border-slate-700 rounded-lg px-3 py-2 text-xs font-medium focus:outline-none focus:border-amber-400 cursor-pointer"
+          >
+            <option value="" disabled>-- Select Member to View History --</option>
+            {members
+              .slice()
+              .sort((a, b) => (parseInt(a.ledgerNo, 10) || 0) - (parseInt(b.ledgerNo, 10) || 0))
+              .map((m) => (
+                <option key={m.ledgerNo} value={m.ledgerNo}>
+                  #{m.ledgerNo} - {m.name}
+                </option>
+              ))}
+          </select>
+        </div>
+      </div>
+
       {/* Toolbar */}
       <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs space-y-3">
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
@@ -352,6 +414,21 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-50 px-2.5 py-1.5 border border-slate-200 rounded-lg text-xs">
+              <Filter className="w-3.5 h-3.5 text-slate-400" />
+              <span className="text-slate-500 font-medium">Status:</span>
+              <select
+                value={statusFilter}
+                onChange={(e) => setStatusFilter(e.target.value as any)}
+                className="bg-transparent font-semibold text-slate-800 focus:outline-none cursor-pointer"
+              >
+                <option value="All">All Statuses</option>
+                <option value="Paid">Fully Paid</option>
+                <option value="Partial">Partial</option>
+                <option value="Due">Pending / Overdue</option>
+              </select>
+            </div>
+
             {overdueMembersList.length > 0 && (
               <button
                 onClick={() => {
@@ -424,6 +501,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                 <th className="py-3 px-4">Ledger No</th>
                 <th className="py-3 px-4">Member Name</th>
                 <th className="py-3 px-4">Monthly Due</th>
+                <th className="py-3 px-4">Payment Status</th>
                 <th className="py-3 px-4">Total Paid</th>
                 <th className="py-3 px-4">Entries</th>
                 <th className="py-3 px-4">Last Payment</th>
@@ -433,7 +511,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             <tbody className="divide-y divide-slate-100 font-mono">
               {filteredMembers.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-12 text-center text-slate-400 font-sans">
+                  <td colSpan={8} className="py-12 text-center text-slate-400 font-sans">
                     No members found. Import or add members above.
                   </td>
                 </tr>
@@ -441,12 +519,35 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                 filteredMembers.map((m) => {
                   const totals = calculateMemberTotals(transactions, m.ledgerNo);
                   const overdueItem = overdueMembersList.find((o) => o.ledgerNo === m.ledgerNo);
+                  const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
+                  const st = contrib?.status || 'Due';
 
                   return (
                     <tr key={m.ledgerNo} className="hover:bg-amber-50/30 transition-colors">
                       <td className="py-3 px-4 font-bold text-slate-900">{m.ledgerNo}</td>
                       <td className="py-3 px-4 font-sans font-bold text-slate-900">{m.name}</td>
                       <td className="py-3 px-4 text-slate-600">{formatMoney(m.monthlyDue)}</td>
+                      <td className="py-3 px-4 font-sans whitespace-nowrap">
+                        {st === 'Paid' ? (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                            <span>Fully Paid</span>
+                          </span>
+                        ) : st === 'Partial' ? (
+                          <span
+                            className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-900 border border-amber-200"
+                            title={`Paid Rs. ${contrib?.paid || 0} of Rs. ${contrib?.expected || m.monthlyDue}`}
+                          >
+                            <AlertCircle className="w-3 h-3 text-amber-600" />
+                            <span>Partial ({formatMoney(contrib?.paid || 0)})</span>
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                            <AlertCircle className="w-3 h-3 text-rose-600" />
+                            <span>Overdue</span>
+                          </span>
+                        )}
+                      </td>
                       <td className="py-3 px-4 font-bold text-emerald-800">{formatMoney(totals.totalPaid)}</td>
                       <td className="py-3 px-4 text-slate-600">{totals.count}</td>
                       <td className="py-3 px-4 text-slate-500">
@@ -601,6 +702,8 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         isOpen={!!selectedHistoryMember}
         onClose={() => setSelectedHistoryMember(null)}
         member={selectedHistoryMember}
+        allMembers={members}
+        onSelectMember={(m) => setSelectedHistoryMember(m)}
         transactions={transactions}
         organizationName={organizationName}
       />
