@@ -1,7 +1,7 @@
 import React, { useState, useMemo } from 'react';
 import { Member, Transaction } from '../types';
-import { fmtDate, formatMoney, calculateMemberTotals, exportCsv, findMember } from '../lib/ledgerUtils';
-import { X, Printer, Download, FileText, Search, Filter, ArrowRightLeft, Calendar } from 'lucide-react';
+import { fmtDate, formatMoney, calculateMemberTotals, exportCsv, findMember, INCOME_HEADS } from '../lib/ledgerUtils';
+import { X, Printer, Download, FileText, Search, Filter, ArrowRightLeft, Calendar, Pencil, Trash2, CheckCircle2, Save } from 'lucide-react';
 
 interface MemberHistoryModalProps {
   isOpen: boolean;
@@ -11,6 +11,9 @@ interface MemberHistoryModalProps {
   onSelectMember?: (member: Member) => void;
   transactions: Transaction[];
   organizationName: string;
+  onSaveTransaction?: (txn: Transaction) => void;
+  onDeleteTransaction?: (id: string) => void;
+  showToast?: (msg: string) => void;
 }
 
 export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
@@ -21,11 +24,24 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   onSelectMember,
   transactions,
   organizationName,
+  onSaveTransaction,
+  onDeleteTransaction,
+  showToast,
 }) => {
   const [orientation, setOrientation] = useState<'portrait' | 'landscape'>('portrait');
   const [selectedYear, setSelectedYear] = useState<string>('All');
   const [selectedHead, setSelectedHead] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
+
+  // Editing state
+  const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
+  const [editDate, setEditDate] = useState<string>('');
+  const [editAmount, setEditAmount] = useState<string>('');
+  const [editHead, setEditHead] = useState<string>('Membership Subscription');
+  const [editReceiptNo, setEditReceiptNo] = useState<string>('');
+  const [editForMonth, setEditForMonth] = useState<string>('');
+  const [editMode, setEditMode] = useState<string>('Cash');
+  const [editRemarks, setEditRemarks] = useState<string>('');
 
   if (!isOpen || !member) return null;
 
@@ -86,7 +102,7 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
           (t.receiptVoucherNo || '').toLowerCase().includes(q) ||
           (t.head || '').toLowerCase().includes(q) ||
           (t.forMonth || '').toLowerCase().includes(q) ||
-          (t.particulars || '').toLowerCase().includes(q)
+          (t.remarks || '').toLowerCase().includes(q)
       );
     }
 
@@ -96,14 +112,61 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   // Member overall statistics
   const totals = calculateMemberTotals(transactions, member.ledgerNo);
 
+  const handleStartEdit = (txn: Transaction) => {
+    setEditingTxn(txn);
+    setEditDate(txn.date || new Date().toISOString().slice(0, 10));
+    setEditAmount(String(txn.amount || ''));
+    setEditHead(txn.head || 'Membership Subscription');
+    setEditReceiptNo(txn.receiptVoucherNo || '');
+    setEditForMonth(txn.forMonth || '');
+    setEditMode(txn.mode || 'Cash');
+    setEditRemarks(txn.remarks || '');
+  };
+
+  const handleSaveEdit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingTxn || !onSaveTransaction) return;
+
+    const parsedAmount = parseFloat(editAmount);
+    if (isNaN(parsedAmount) || parsedAmount < 0) {
+      if (showToast) showToast('Please enter a valid amount.');
+      return;
+    }
+
+    const updatedTxn: Transaction = {
+      ...editingTxn,
+      date: editDate,
+      amount: parsedAmount,
+      head: editHead,
+      receiptVoucherNo: editReceiptNo,
+      forMonth: editForMonth,
+      mode: editMode,
+      remarks: editRemarks,
+      updatedAt: new Date().toISOString(),
+    };
+
+    onSaveTransaction(updatedTxn);
+    if (showToast) showToast(`Payment receipt #${updatedTxn.receiptVoucherNo || 'entry'} updated successfully!`);
+    setEditingTxn(null);
+  };
+
+  const handleDelete = (txn: Transaction) => {
+    if (!onDeleteTransaction) return;
+    const confirmMsg = `Delete payment receipt #${txn.receiptVoucherNo || 'entry'} of ${formatMoney(txn.amount)} dated ${fmtDate(txn.date)}?`;
+    if (window.confirm(confirmMsg)) {
+      onDeleteTransaction(txn.id);
+      if (showToast) showToast('Payment entry deleted.');
+    }
+  };
+
   const handleExportCSV = () => {
-    const headers = ['Date', 'Receipt/Voucher No', 'Fund / Head', 'For Month', 'Particulars', 'Payment Mode', 'Amount (Rs.)', 'Cumulative Total (Rs.)'];
+    const headers = ['Date', 'Receipt/Voucher No', 'Fund / Head', 'For Month', 'Remarks', 'Payment Mode', 'Amount (Rs.)', 'Cumulative Total (Rs.)'];
     const rows = filteredDisplayTxns.map((t) => [
       fmtDate(t.date),
       t.receiptVoucherNo || '—',
       t.head,
       t.forMonth || '—',
-      t.particulars || '—',
+      t.remarks || '—',
       t.mode || 'Cash',
       t.amount,
       t.runningTotal,
@@ -245,7 +308,10 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
                 value={member.ledgerNo}
                 onChange={(e) => {
                   const m = findMember(allMembers, e.target.value);
-                  if (m) onSelectMember(m);
+                  if (m) {
+                    setEditingTxn(null);
+                    onSelectMember(m);
+                  }
                 }}
                 className="text-xs font-semibold text-slate-800 bg-transparent focus:outline-none pr-2 cursor-pointer max-w-[200px]"
               >
@@ -286,6 +352,134 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
             </span>
           </div>
         </div>
+
+        {/* Inline Edit Transaction Form Modal / Card */}
+        {editingTxn && (
+          <div className="bg-amber-50/80 border-2 border-amber-300 rounded-xl p-4 mb-5 shadow-sm">
+            <div className="flex items-center justify-between pb-2 mb-3 border-b border-amber-200">
+              <div className="flex items-center gap-2 text-amber-900 font-bold text-sm">
+                <Pencil className="w-4 h-4 text-amber-600" />
+                <span>Edit Payment Entry (Receipt #{editingTxn.receiptVoucherNo || 'N/A'})</span>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingTxn(null)}
+                className="text-xs font-semibold text-slate-500 hover:text-slate-700 underline cursor-pointer"
+              >
+                Cancel
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-3 text-xs">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Payment Date</label>
+                  <input
+                    type="date"
+                    required
+                    value={editDate}
+                    onChange={(e) => setEditDate(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white font-mono focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Amount (Rs.)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    required
+                    value={editAmount}
+                    onChange={(e) => setEditAmount(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white font-mono font-bold text-emerald-800 focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Receipt / Voucher #</label>
+                  <input
+                    type="text"
+                    value={editReceiptNo}
+                    onChange={(e) => setEditReceiptNo(e.target.value)}
+                    placeholder="e.g. R-102"
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white font-mono focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Fund / Head</label>
+                  <select
+                    value={editHead}
+                    onChange={(e) => setEditHead(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white font-semibold text-slate-800 focus:ring-2 focus:ring-amber-400 focus:outline-none cursor-pointer"
+                  >
+                    {INCOME_HEADS.map((h) => (
+                      <option key={h} value={h}>
+                        {h}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">For Month</label>
+                  <input
+                    type="text"
+                    value={editForMonth}
+                    onChange={(e) => setEditForMonth(e.target.value)}
+                    placeholder="e.g. 2026-08 or August 2026"
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Payment Mode</label>
+                  <select
+                    value={editMode}
+                    onChange={(e) => setEditMode(e.target.value)}
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white focus:ring-2 focus:ring-amber-400 focus:outline-none cursor-pointer"
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="UPI">UPI / GPay / PhonePe</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Cheque">Cheque</option>
+                    <option value="Online">Online</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-700 font-medium mb-1">Remarks / Particulars</label>
+                  <input
+                    type="text"
+                    value={editRemarks}
+                    onChange={(e) => setEditRemarks(e.target.value)}
+                    placeholder="Optional notes..."
+                    className="w-full border border-slate-300 rounded-lg p-2 bg-white focus:ring-2 focus:ring-amber-400 focus:outline-none"
+                  />
+                </div>
+              </div>
+
+              <div className="flex items-center justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setEditingTxn(null)}
+                  className="px-3.5 py-1.5 bg-white border border-slate-300 text-slate-700 hover:bg-slate-100 rounded-lg text-xs font-semibold transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center gap-1.5 px-4 py-1.5 bg-amber-600 hover:bg-amber-700 text-white rounded-lg text-xs font-bold transition-colors shadow-xs cursor-pointer"
+                >
+                  <Save className="w-3.5 h-3.5" />
+                  <span>Update Payment Entry</span>
+                </button>
+              </div>
+            </form>
+          </div>
+        )}
 
         {/* Search & Filter Toolbar */}
         <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3 mb-4">
@@ -355,12 +549,13 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
                 <th className="py-2.5 px-3">Mode</th>
                 <th className="py-2.5 px-3 text-right">Amount (Rs.)</th>
                 <th className="py-2.5 px-3 text-right">Cumulative Total</th>
+                <th className="py-2.5 px-3 text-center min-w-[70px]">Action</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 bg-white">
               {filteredDisplayTxns.length === 0 ? (
                 <tr>
-                  <td colSpan={7} className="py-10 text-center text-slate-400 font-sans">
+                  <td colSpan={8} className="py-10 text-center text-slate-400 font-sans">
                     {searchQuery || selectedYear !== 'All' || selectedHead !== 'All'
                       ? 'No payments matching the selected filters.'
                       : 'No payment transactions recorded for this member yet.'}
@@ -368,7 +563,10 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
                 </tr>
               ) : (
                 filteredDisplayTxns.map((t) => (
-                  <tr key={t.id} className="hover:bg-amber-50/40 transition-colors">
+                  <tr
+                    key={t.id}
+                    className={`hover:bg-amber-50/40 transition-colors ${editingTxn?.id === t.id ? 'bg-amber-100/60 font-bold' : ''}`}
+                  >
                     <td className="py-2 px-3 text-slate-700 whitespace-nowrap">{fmtDate(t.date)}</td>
                     <td className="py-2 px-3 font-mono text-slate-500">{t.receiptVoucherNo || '—'}</td>
                     <td className="py-2 px-3 font-sans font-medium text-slate-900">{t.head}</td>
@@ -376,6 +574,28 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
                     <td className="py-2 px-3 text-slate-500 font-sans">{t.mode || 'Cash'}</td>
                     <td className="py-2 px-3 text-right font-bold text-slate-900">{formatMoney(t.amount)}</td>
                     <td className="py-2 px-3 text-right font-bold text-emerald-800">{formatMoney(t.runningTotal)}</td>
+                    <td className="py-2 px-3 text-center whitespace-nowrap font-sans">
+                      <div className="flex items-center justify-center gap-1">
+                        {onSaveTransaction && (
+                          <button
+                            onClick={() => handleStartEdit(t)}
+                            title="Edit this payment entry"
+                            className="p-1 text-slate-500 hover:text-amber-700 hover:bg-amber-100 rounded transition-colors cursor-pointer"
+                          >
+                            <Pencil className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                        {onDeleteTransaction && (
+                          <button
+                            onClick={() => handleDelete(t)}
+                            title="Delete this payment entry"
+                            className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded transition-colors cursor-pointer"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
+                      </div>
+                    </td>
                   </tr>
                 ))
               )}

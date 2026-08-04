@@ -13,6 +13,8 @@ interface MembersTabProps {
   onAddMember: (member: Member) => void;
   onRemoveMember: (ledgerNo: string) => void;
   onBulkImportMembers: (newMembers: Member[]) => void;
+  onSaveTransaction?: (txn: Transaction) => void;
+  onDeleteTransaction?: (id: string) => void;
   showToast: (msg: string) => void;
 }
 
@@ -23,6 +25,8 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   onAddMember,
   onRemoveMember,
   onBulkImportMembers,
+  onSaveTransaction,
+  onDeleteTransaction,
   showToast,
 }) => {
   const [ledgerNo, setLedgerNo] = useState<string>('');
@@ -706,6 +710,9 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         onSelectMember={(m) => setSelectedHistoryMember(m)}
         transactions={transactions}
         organizationName={organizationName}
+        onSaveTransaction={onSaveTransaction}
+        onDeleteTransaction={onDeleteTransaction}
+        showToast={showToast}
       />
 
       {/* Send Reminder Modal */}

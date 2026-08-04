@@ -346,6 +346,8 @@ export default function App() {
               onAddMember={handleAddMember}
               onRemoveMember={handleRemoveMember}
               onBulkImportMembers={handleBulkImportMembers}
+              onSaveTransaction={handleSaveTransaction}
+              onDeleteTransaction={handleDeleteTransaction}
               showToast={showToast}
             />
           )}
