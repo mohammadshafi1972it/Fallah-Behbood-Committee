@@ -1,8 +1,8 @@
 import React, { useState, useMemo } from 'react';
 import { Transaction, Member, AppSettings } from '../types';
-import { computeMonthlySummary, computeDailySummary, formatMoney, num, exportCsv, fmtDate } from '../lib/ledgerUtils';
+import { computeMonthlySummary, computeDailySummary, formatMoney, num, exportCsv, fmtDate, calculateMemberTotals } from '../lib/ledgerUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
-import { TrendingUp, TrendingDown, Wallet, Users, FileText, Download, RefreshCw, Calendar } from 'lucide-react';
+import { TrendingUp, TrendingDown, Wallet, Users, FileText, Download, RefreshCw, Calendar, Award } from 'lucide-react';
 
 interface DashboardTabProps {
   transactions: Transaction[];
@@ -75,6 +75,24 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
     return Object.entries(map).map(([name, value]) => ({ name, value }));
   }, [transactions]);
 
+  // Top 5 Contributing Members
+  const topContributors = useMemo(() => {
+    const list = members.map((m) => {
+      const totals = calculateMemberTotals(transactions, m.ledgerNo);
+      const shortName = m.name.length > 15 ? m.name.slice(0, 15) + '…' : m.name;
+      return {
+        ledgerNo: m.ledgerNo,
+        name: m.name,
+        displayName: `#${m.ledgerNo} ${shortName}`,
+        totalPaid: totals.totalPaid,
+        txCount: totals.count,
+      };
+    });
+
+    list.sort((a, b) => b.totalPaid - a.totalPaid || b.txCount - a.txCount);
+    return list.slice(0, 5);
+  }, [members, transactions]);
+
   const handleOpeningBalChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const val = e.target.value;
     setOpeningBal(val);
@@ -137,6 +155,88 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
 
       {/* Recharts Analytics Section */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        {/* Top 5 Contributing Members Bar Chart Card */}
+        <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs col-span-1 lg:col-span-2">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2 mb-4 pb-3 border-b border-slate-100">
+            <div>
+              <h3 className="text-sm font-serif font-bold text-slate-800 flex items-center gap-2">
+                <Award className="w-4 h-4 text-amber-500" />
+                <span>Top 5 Contributing Members</span>
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Highest contributing members by cumulative recorded contributions and subscriptions
+              </p>
+            </div>
+            <span className="text-[11px] font-bold px-2.5 py-1 bg-amber-50 text-amber-900 border border-amber-200 rounded-full font-mono">
+              High-Engagement Committee Insight
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-center">
+            {/* Bar Chart View */}
+            <div className="lg:col-span-2 h-64 w-full">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={topContributors} margin={{ top: 10, right: 10, left: 10, bottom: 15 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                  <XAxis dataKey="displayName" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip
+                    formatter={(value) => [formatMoney(Number(value)), 'Total Contributions']}
+                    labelFormatter={(label) => `Member: ${label}`}
+                  />
+                  <Bar dataKey="totalPaid" name="Total Contributions (Rs.)" radius={[6, 6, 0, 0]}>
+                    {topContributors.map((entry, index) => (
+                      <Cell
+                        key={`top-cell-${index}`}
+                        fill={index === 0 ? '#B8863B' : index === 1 ? '#2E6E4E' : index === 2 ? '#1F3A5F' : '#5c8a99'}
+                      />
+                    ))}
+                  </Bar>
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+
+            {/* Top 5 Member List */}
+            <div className="space-y-2 font-sans border-t lg:border-t-0 lg:border-l border-slate-100 pt-4 lg:pt-0 lg:pl-4">
+              <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 mb-3">Leaderboard Summary</h4>
+              {topContributors.length === 0 ? (
+                <p className="text-xs text-slate-400 italic">No member contribution records available.</p>
+              ) : (
+                topContributors.map((m, idx) => (
+                  <div
+                    key={m.ledgerNo}
+                    className="flex items-center justify-between p-2 rounded-lg bg-slate-50 border border-slate-100 hover:bg-amber-50/50 transition-colors"
+                  >
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <span
+                        className={`w-5 h-5 rounded-full text-[10px] font-extrabold flex items-center justify-center shrink-0 ${
+                          idx === 0
+                            ? 'bg-amber-500 text-white shadow-2xs'
+                            : idx === 1
+                            ? 'bg-emerald-600 text-white'
+                            : idx === 2
+                            ? 'bg-slate-600 text-white'
+                            : 'bg-slate-200 text-slate-700'
+                        }`}
+                      >
+                        #{idx + 1}
+                      </span>
+                      <div className="min-w-0">
+                        <p className="text-xs font-bold text-slate-900 truncate">{m.name}</p>
+                        <p className="text-[10px] text-slate-500 font-mono">
+                          Ledger #{m.ledgerNo} • {m.txCount} {m.txCount === 1 ? 'payment' : 'payments'}
+                        </p>
+                      </div>
+                    </div>
+                    <span className="text-xs font-bold text-emerald-800 font-mono ml-2 shrink-0">
+                      {formatMoney(m.totalPaid)}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
         {/* Month-wise Comparison */}
         <div className="bg-white border border-slate-200 p-5 rounded-xl shadow-xs">
           <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider mb-4">Month-Wise Income vs Expenditure</h3>

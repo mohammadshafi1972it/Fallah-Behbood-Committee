@@ -3,8 +3,9 @@ import { Member, Transaction, ContributionItem } from '../types';
 import { calculateMemberTotals, formatMoney, num, normalizeName, exportCsv, fmtDate, INCOME_HEADS, calculateContributionsForMonth, findMember, parseUniversalFileImport } from '../lib/ledgerUtils';
 import { MemberHistoryModal } from './MemberHistoryModal';
 import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
+import { MemberCollapsibleHistory } from './MemberCollapsibleHistory';
 import * as XLSX from 'xlsx';
-import { Users, UserPlus, Upload, Search, Download, Printer, History, Trash2, RefreshCw, CheckCircle2, AlertCircle, Bell, Filter } from 'lucide-react';
+import { Users, UserPlus, Upload, Search, Download, Printer, History, Trash2, RefreshCw, CheckCircle2, AlertCircle, Bell, Filter, ChevronDown, ChevronUp } from 'lucide-react';
 
 interface MembersTabProps {
   members: Member[];
@@ -40,6 +41,16 @@ export const MembersTab: React.FC<MembersTabProps> = ({
 
   // History modal state
   const [selectedHistoryMember, setSelectedHistoryMember] = useState<Member | null>(null);
+
+  // Collapsible inline history state
+  const [expandedLedgers, setExpandedLedgers] = useState<Record<string, boolean>>({});
+
+  const toggleExpandMember = (lNo: string) => {
+    setExpandedLedgers((prev) => ({
+      ...prev,
+      [lNo]: !prev[lNo],
+    }));
+  };
 
   // Reminder modal state
   const [isReminderModalOpen, setIsReminderModalOpen] = useState(false);
@@ -525,71 +536,121 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                   const overdueItem = overdueMembersList.find((o) => o.ledgerNo === m.ledgerNo);
                   const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
                   const st = contrib?.status || 'Due';
+                  const isExpanded = !!expandedLedgers[m.ledgerNo];
 
                   return (
-                    <tr key={m.ledgerNo} className="hover:bg-amber-50/30 transition-colors">
-                      <td className="py-3 px-4 font-bold text-slate-900">{m.ledgerNo}</td>
-                      <td className="py-3 px-4 font-sans font-bold text-slate-900">{m.name}</td>
-                      <td className="py-3 px-4 text-slate-600">{formatMoney(m.monthlyDue)}</td>
-                      <td className="py-3 px-4 font-sans whitespace-nowrap">
-                        {st === 'Paid' ? (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
-                            <CheckCircle2 className="w-3 h-3 text-emerald-600" />
-                            <span>Fully Paid</span>
-                          </span>
-                        ) : st === 'Partial' ? (
-                          <span
-                            className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-900 border border-amber-200"
-                            title={`Paid Rs. ${contrib?.paid || 0} of Rs. ${contrib?.expected || m.monthlyDue}`}
+                    <React.Fragment key={m.ledgerNo}>
+                      <tr className={`hover:bg-amber-50/40 transition-colors ${isExpanded ? 'bg-amber-50/60 border-l-4 border-l-amber-500' : ''}`}>
+                        <td className="py-3 px-4 font-bold text-slate-900">
+                          <button
+                            onClick={() => toggleExpandMember(m.ledgerNo)}
+                            className="inline-flex items-center gap-1.5 hover:text-amber-700 cursor-pointer font-bold focus:outline-none"
+                            title="Click to toggle payment history"
                           >
-                            <AlertCircle className="w-3 h-3 text-amber-600" />
-                            <span>Partial ({formatMoney(contrib?.paid || 0)})</span>
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-rose-100 text-rose-800 border border-rose-200">
-                            <AlertCircle className="w-3 h-3 text-rose-600" />
-                            <span>Overdue</span>
-                          </span>
-                        )}
-                      </td>
-                      <td className="py-3 px-4 font-bold text-emerald-800">{formatMoney(totals.totalPaid)}</td>
-                      <td className="py-3 px-4 text-slate-600">{totals.count}</td>
-                      <td className="py-3 px-4 text-slate-500">
-                        {totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : '—'}
-                      </td>
-                      <td className="py-3 px-4 text-right whitespace-nowrap font-sans">
-                        <div className="flex items-center justify-end gap-1">
-                          {overdueItem && (
-                            <button
-                              onClick={() => {
-                                setReminderMonth(currentMonth);
-                                setSingleTargetMember(overdueItem);
-                                setIsReminderModalOpen(true);
-                              }}
-                              className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md transition-colors cursor-pointer"
-                              title={`Send dues reminder for ${currentMonth}`}
+                            <span>#{m.ledgerNo}</span>
+                            {isExpanded ? (
+                              <ChevronUp className="w-3.5 h-3.5 text-amber-600" />
+                            ) : (
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-400 hover:text-amber-600" />
+                            )}
+                          </button>
+                        </td>
+                        <td className="py-3 px-4 font-sans font-bold text-slate-900">
+                          <button
+                            onClick={() => toggleExpandMember(m.ledgerNo)}
+                            className="hover:text-amber-800 text-left cursor-pointer focus:outline-none"
+                            title="Click to view payment history"
+                          >
+                            {m.name}
+                          </button>
+                        </td>
+                        <td className="py-3 px-4 text-slate-600">{formatMoney(m.monthlyDue)}</td>
+                        <td className="py-3 px-4 font-sans whitespace-nowrap">
+                          {st === 'Paid' ? (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
+                              <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                              <span>Fully Paid</span>
+                            </span>
+                          ) : st === 'Partial' ? (
+                            <span
+                              className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-amber-100 text-amber-900 border border-amber-200"
+                              title={`Paid Rs. ${contrib?.paid || 0} of Rs. ${contrib?.expected || m.monthlyDue}`}
                             >
-                              <Bell className="w-3.5 h-3.5 text-amber-600" />
-                              <span>Remind</span>
-                            </button>
+                              <AlertCircle className="w-3 h-3 text-amber-600" />
+                              <span>Partial ({formatMoney(contrib?.paid || 0)})</span>
+                            </span>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-rose-100 text-rose-800 border border-rose-200">
+                              <AlertCircle className="w-3 h-3 text-rose-600" />
+                              <span>Overdue</span>
+                            </span>
                           )}
-                          <button
-                            onClick={() => setSelectedHistoryMember(m)}
-                            className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-md transition-colors cursor-pointer"
-                          >
-                            <History className="w-3.5 h-3.5" />
-                            <span>History</span>
-                          </button>
-                          <button
-                            onClick={() => onRemoveMember(m.ledgerNo)}
-                            className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                            title="Remove member"
-                          >
-                            <Trash2 className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
+                        </td>
+                        <td className="py-3 px-4 font-bold text-emerald-800">{formatMoney(totals.totalPaid)}</td>
+                        <td className="py-3 px-4 text-slate-600">{totals.count}</td>
+                        <td className="py-3 px-4 text-slate-500">
+                          {totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : '—'}
+                        </td>
+                        <td className="py-3 px-4 text-right whitespace-nowrap font-sans">
+                          <div className="flex items-center justify-end gap-1">
+                            {overdueItem && (
+                              <button
+                                onClick={() => {
+                                  setReminderMonth(currentMonth);
+                                  setSingleTargetMember(overdueItem);
+                                  setIsReminderModalOpen(true);
+                                }}
+                                className="inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-200 rounded-md transition-colors cursor-pointer"
+                                title={`Send dues reminder for ${currentMonth}`}
+                              >
+                                <Bell className="w-3.5 h-3.5 text-amber-600" />
+                                <span>Remind</span>
+                              </button>
+                            )}
+                            <button
+                              onClick={() => toggleExpandMember(m.ledgerNo)}
+                              className={`inline-flex items-center gap-1 px-2.5 py-1 text-xs font-semibold rounded-md transition-colors cursor-pointer ${
+                                isExpanded
+                                  ? 'bg-amber-600 text-white shadow-2xs'
+                                  : 'text-slate-700 bg-slate-100 hover:bg-slate-200'
+                              }`}
+                              title="Toggle individual payment contribution history"
+                            >
+                              <History className="w-3.5 h-3.5" />
+                              <span>History</span>
+                              {isExpanded ? (
+                                <ChevronUp className="w-3 h-3 ml-0.5" />
+                              ) : (
+                                <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                              )}
+                            </button>
+                            <button
+                              onClick={() => onRemoveMember(m.ledgerNo)}
+                              className="p-1.5 text-rose-600 hover:text-rose-800 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                              title="Remove member"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+
+                      {/* Collapsible Individual Payment History Table */}
+                      {isExpanded && (
+                        <tr className="bg-slate-50/80">
+                          <td colSpan={8} className="p-2 sm:p-3">
+                            <MemberCollapsibleHistory
+                              member={m}
+                              transactions={transactions}
+                              onOpenFullModal={(memberToOpen) => setSelectedHistoryMember(memberToOpen)}
+                              onSaveTransaction={onSaveTransaction}
+                              onDeleteTransaction={onDeleteTransaction}
+                              showToast={showToast}
+                            />
+                          </td>
+                        </tr>
+                      )}
+                    </React.Fragment>
                   );
                 })
               )}
