@@ -36,6 +36,18 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     }
   }, [isOpen, storageStatus.isGoogleConnected]);
 
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        showToast('Google Account connected successfully!');
+        onStatusUpdate();
+        fetchDriveFiles();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
+  }, [onStatusUpdate, showToast]);
+
   if (!isOpen) return null;
 
   const handleConnectGoogle = async () => {
@@ -44,7 +56,11 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       const res = await fetch('/api/auth/google/url');
       const data = await res.json();
       if (data.url) {
-        window.location.href = data.url;
+        // Try opening popup first, fallback to direct redirect if blocked
+        const authPopup = window.open(data.url, 'google_oauth_popup', 'width=600,height=700');
+        if (!authPopup || authPopup.closed || typeof authPopup.closed === 'undefined') {
+          window.location.href = data.url;
+        }
       } else {
         showToast('OAuth configuration error: ' + (data.error || 'Unable to generate auth URL'));
       }

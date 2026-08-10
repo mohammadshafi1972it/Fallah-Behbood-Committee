@@ -97,6 +97,15 @@ export default function App() {
       window.history.replaceState({}, document.title, window.location.pathname);
       checkGoogleAuthStatus();
     }
+
+    const handleMessage = (event: MessageEvent) => {
+      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
+        showToast('Google Account connected successfully!');
+        checkGoogleAuthStatus();
+      }
+    };
+    window.addEventListener('message', handleMessage);
+    return () => window.removeEventListener('message', handleMessage);
   }, [checkGoogleAuthStatus, showToast]);
 
   // Save to LocalStorage on Change

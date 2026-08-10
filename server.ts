@@ -30,7 +30,7 @@ function getOAuth2Client(req?: express.Request) {
 }
 
 // Helper to get authenticated Google Auth client from user cookies
-function getAuthenticatedClient(req: express.Request) {
+async function getAuthenticatedClient(req: express.Request, res?: express.Response) {
   const accessToken = req.cookies.g_access_token;
   const refreshToken = req.cookies.g_refresh_token;
 
@@ -43,6 +43,28 @@ function getAuthenticatedClient(req: express.Request) {
     access_token: accessToken,
     refresh_token: refreshToken,
   });
+
+  // Automatically refresh access token if missing or expired, but refresh token exists
+  if (!accessToken && refreshToken) {
+    try {
+      const refreshed = await oauth2Client.refreshAccessToken();
+      const newAccess = refreshed.credentials.access_token;
+      if (newAccess) {
+        oauth2Client.setCredentials({ access_token: newAccess, refresh_token: refreshToken });
+        if (res) {
+          res.cookie("g_access_token", newAccess, {
+            httpOnly: true,
+            secure: true,
+            sameSite: "none",
+            maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+          });
+        }
+      }
+    } catch (err) {
+      console.error("Failed to refresh Google OAuth token:", err);
+      return null;
+    }
+  }
 
   return oauth2Client;
 }
@@ -89,13 +111,11 @@ app.get("/api/auth/google/callback", async (req, res) => {
     const oauth2Client = getOAuth2Client(req);
     const { tokens } = await oauth2Client.getToken(code);
 
-    const isProd = process.env.NODE_ENV === "production";
-    
     if (tokens.access_token) {
       res.cookie("g_access_token", tokens.access_token, {
         httpOnly: true,
         secure: true,
-        sameSite: "lax",
+        sameSite: "none",
         maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
       });
     }
@@ -104,12 +124,45 @@ app.get("/api/auth/google/callback", async (req, res) => {
       res.cookie("g_refresh_token", tokens.refresh_token, {
         httpOnly: true,
         secure: true,
-        sameSite: "lax",
+        sameSite: "none",
         maxAge: 30 * 24 * 60 * 60 * 1000, // 30 days
       });
     }
 
-    res.redirect("/?google_auth=success");
+    res.send(`
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>Google Drive Connected</title>
+          <style>
+            body { font-family: system-ui, -apple-system, sans-serif; display: flex; align-items: center; justify-content: center; height: 100vh; margin: 0; background-color: #f8fafc; color: #0f172a; }
+            .card { text-align: center; padding: 2.5rem; background: white; border-radius: 1rem; box-shadow: 0 10px 25px -5px rgba(0,0,0,0.1); border: 1px solid #e2e8f0; max-width: 420px; width: 90%; }
+            .icon { width: 56px; height: 56px; color: #16a34a; margin-bottom: 1rem; }
+            h2 { margin: 0 0 0.5rem 0; font-size: 1.35rem; font-weight: 700; color: #0f172a; }
+            p { margin: 0; color: #64748b; font-size: 0.9rem; line-height: 1.5; }
+          </style>
+        </head>
+        <body>
+          <div class="card">
+            <svg class="icon" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+            <h2>Google Drive Connected!</h2>
+            <p>Authentication successful. You can close this window now.</p>
+          </div>
+          <script>
+            try {
+              if (window.opener) {
+                window.opener.postMessage({ type: 'OAUTH_AUTH_SUCCESS' }, '*');
+                setTimeout(function() { window.close(); }, 1000);
+              } else {
+                window.location.href = '/?google_auth=success';
+              }
+            } catch(e) {
+              window.location.href = '/?google_auth=success';
+            }
+          </script>
+        </body>
+      </html>
+    `);
   } catch (error: any) {
     console.error("Error exchanging OAuth code:", error);
     res.status(500).send(`Authentication failed: ${error.message || error}`);
@@ -118,7 +171,7 @@ app.get("/api/auth/google/callback", async (req, res) => {
 
 // Google OAuth Status
 app.get("/api/auth/google/status", async (req, res) => {
-  const authClient = getAuthenticatedClient(req);
+  const authClient = await getAuthenticatedClient(req, res);
   if (!authClient) {
     return res.json({ authenticated: false });
   }
@@ -139,14 +192,14 @@ app.get("/api/auth/google/status", async (req, res) => {
 
 // Google Logout
 app.post("/api/auth/google/logout", (_req, res) => {
-  res.clearCookie("g_access_token");
-  res.clearCookie("g_refresh_token");
+  res.clearCookie("g_access_token", { secure: true, sameSite: "none" });
+  res.clearCookie("g_refresh_token", { secure: true, sameSite: "none" });
   res.json({ success: true });
 });
 
 // List Google Drive Files & Spreadsheets
 app.get("/api/google/drive/files", async (req, res) => {
-  const authClient = getAuthenticatedClient(req);
+  const authClient = await getAuthenticatedClient(req, res);
   if (!authClient) {
     return res.status(401).json({ error: "Google OAuth not authenticated." });
   }
@@ -169,7 +222,7 @@ app.get("/api/google/drive/files", async (req, res) => {
 
 // Export / Sync to Google Sheets
 app.post("/api/google/drive/sync-sheet", async (req, res) => {
-  const authClient = getAuthenticatedClient(req);
+  const authClient = await getAuthenticatedClient(req, res);
   if (!authClient) {
     return res.status(401).json({ error: "Google OAuth not authenticated." });
   }
@@ -271,7 +324,7 @@ app.post("/api/google/drive/sync-sheet", async (req, res) => {
 
 // Save complete JSON Backup directly to Google Drive
 app.post("/api/google/drive/save-backup", async (req, res) => {
-  const authClient = getAuthenticatedClient(req);
+  const authClient = await getAuthenticatedClient(req, res);
   if (!authClient) {
     return res.status(401).json({ error: "Google OAuth not authenticated." });
   }
@@ -328,7 +381,7 @@ app.post("/api/google/drive/save-backup", async (req, res) => {
 
 // Load JSON Backup or Google Sheet from Drive
 app.get("/api/google/drive/load-file/:fileId", async (req, res) => {
-  const authClient = getAuthenticatedClient(req);
+  const authClient = await getAuthenticatedClient(req, res);
   if (!authClient) {
     return res.status(401).json({ error: "Google OAuth not authenticated." });
   }
