@@ -1,59 +1,94 @@
-import { initializeApp, getApps, getApp } from 'firebase/app';
-import { 
-  getAuth, 
-  signInWithPopup, 
-  GoogleAuthProvider, 
-  signOut, 
-  onAuthStateChanged, 
-  User 
-} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Transaction, Member, AppSettings, DriveFileItem } from '../types';
 
-// Initialize Firebase App instance safely (singleton)
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-export const auth = getAuth(app);
+// Global declaration for Google Identity Services
+declare global {
+  interface Window {
+    google?: {
+      accounts?: {
+        oauth2?: {
+          initTokenClient: (config: {
+            client_id: string;
+            scope: string;
+            callback: (response: { access_token?: string; error?: any; details?: string }) => void;
+            error_callback?: (error: any) => void;
+          }) => {
+            requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+          };
+          revoke: (token: string, done: () => void) => void;
+        };
+      };
+    };
+  }
+}
 
-// Provider with Drive & Sheets scopes
-const provider = new GoogleAuthProvider();
-provider.addScope('https://www.googleapis.com/auth/drive.file');
-provider.addScope('https://www.googleapis.com/auth/spreadsheets');
-provider.addScope('https://www.googleapis.com/auth/userinfo.email');
-provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
-provider.setCustomParameters({
-  prompt: 'select_account',
-});
+export interface GoogleUserProfile {
+  id?: string;
+  email?: string;
+  name?: string;
+  picture?: string;
+}
 
-// In-memory access token cache
+const SCOPES = [
+  'https://www.googleapis.com/auth/drive.file',
+  'https://www.googleapis.com/auth/spreadsheets',
+  'https://www.googleapis.com/auth/userinfo.email',
+  'https://www.googleapis.com/auth/userinfo.profile',
+].join(' ');
+
+const TOKEN_STORAGE_KEY = 'fbc_google_access_token';
+const USER_STORAGE_KEY = 'fbc_google_user_profile';
+
 let cachedAccessToken: string | null = null;
-let isSigningIn = false;
+let cachedUserProfile: GoogleUserProfile | null = null;
+const authListeners: Array<(user: GoogleUserProfile | null, token: string | null) => void> = [];
 
-// Keep token in session storage as fallback across page refresh in active session
-const SESSION_TOKEN_KEY = 'fbc_google_access_token';
+// Initialize from storage
 try {
-  const saved = sessionStorage.getItem(SESSION_TOKEN_KEY);
-  if (saved) cachedAccessToken = saved;
+  const savedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
+  if (savedToken) cachedAccessToken = savedToken;
+  const savedUser = sessionStorage.getItem(USER_STORAGE_KEY) || localStorage.getItem(USER_STORAGE_KEY);
+  if (savedUser) cachedUserProfile = JSON.parse(savedUser);
 } catch (e) {
   // ignore
 }
 
-export function setCachedToken(token: string | null) {
+export function setCachedAuth(token: string | null, user: GoogleUserProfile | null) {
   cachedAccessToken = token;
+  cachedUserProfile = user;
   try {
     if (token) {
-      sessionStorage.setItem(SESSION_TOKEN_KEY, token);
+      sessionStorage.setItem(TOKEN_STORAGE_KEY, token);
+      localStorage.setItem(TOKEN_STORAGE_KEY, token);
     } else {
-      sessionStorage.removeItem(SESSION_TOKEN_KEY);
+      sessionStorage.removeItem(TOKEN_STORAGE_KEY);
+      localStorage.removeItem(TOKEN_STORAGE_KEY);
+    }
+
+    if (user) {
+      sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user));
+    } else {
+      sessionStorage.removeItem(USER_STORAGE_KEY);
+      localStorage.removeItem(USER_STORAGE_KEY);
     }
   } catch (e) {
     // ignore
   }
+
+  authListeners.forEach((fn) => {
+    try {
+      fn(user, token);
+    } catch (err) {
+      console.error(err);
+    }
+  });
 }
 
 export function getCachedToken(): string | null {
   if (!cachedAccessToken) {
     try {
-      cachedAccessToken = sessionStorage.getItem(SESSION_TOKEN_KEY);
+      cachedAccessToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
     } catch (e) {
       // ignore
     }
@@ -61,48 +96,132 @@ export function getCachedToken(): string | null {
   return cachedAccessToken;
 }
 
-export const initAuth = (
-  onAuthSuccess?: (user: User, token: string) => void,
-  onAuthFailure?: () => void
-) => {
-  return onAuthStateChanged(auth, async (user: User | null) => {
-    if (user) {
-      const token = getCachedToken();
-      if (token) {
-        if (onAuthSuccess) onAuthSuccess(user, token);
-      } else if (!isSigningIn) {
-        if (onAuthFailure) onAuthFailure();
-      }
-    } else {
-      setCachedToken(null);
-      if (onAuthFailure) onAuthFailure();
+export function getCachedUser(): GoogleUserProfile | null {
+  if (!cachedUserProfile) {
+    try {
+      const savedUser = sessionStorage.getItem(USER_STORAGE_KEY) || localStorage.getItem(USER_STORAGE_KEY);
+      if (savedUser) cachedUserProfile = JSON.parse(savedUser);
+    } catch (e) {
+      // ignore
+    }
+  }
+  return cachedUserProfile;
+}
+
+export function subscribeAuth(callback: (user: GoogleUserProfile | null, token: string | null) => void) {
+  authListeners.push(callback);
+  // Trigger immediate current state
+  callback(getCachedUser(), getCachedToken());
+  return () => {
+    const idx = authListeners.indexOf(callback);
+    if (idx > -1) authListeners.splice(idx, 1);
+  };
+}
+
+// Helper to ensure GSI script is loaded
+async function ensureGoogleScriptLoaded(): Promise<void> {
+  if (window.google?.accounts?.oauth2) return;
+
+  return new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[src="https://accounts.google.com/gsi/client"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve());
+      existing.addEventListener('error', () => reject(new Error('Failed to load Google Identity client')));
+      // In case it already loaded
+      if (window.google?.accounts?.oauth2) resolve();
+      return;
+    }
+
+    const script = document.createElement('script');
+    script.src = 'https://accounts.google.com/gsi/client';
+    script.async = true;
+    script.defer = true;
+    script.onload = () => resolve();
+    script.onerror = () => reject(new Error('Failed to load Google Identity client'));
+    document.head.appendChild(script);
+  });
+}
+
+/**
+ * Initiates Google OAuth Sign In using Google Identity Services (GIS)
+ */
+export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessToken: string }> {
+  await ensureGoogleScriptLoaded();
+
+  if (!window.google?.accounts?.oauth2) {
+    throw new Error('Google Identity Services not ready. Please try again.');
+  }
+
+  const clientId = firebaseConfig.oAuthClientId;
+  if (!clientId) {
+    throw new Error('OAuth Client ID is missing in configuration.');
+  }
+
+  return new Promise((resolve, reject) => {
+    let handled = false;
+
+    try {
+      const tokenClient = window.google!.accounts!.oauth2!.initTokenClient({
+        client_id: clientId,
+        scope: SCOPES,
+        callback: async (response) => {
+          if (handled) return;
+          handled = true;
+
+          if (response.error) {
+            reject(new Error(response.details || response.error || 'Google sign-in authorization failed.'));
+            return;
+          }
+
+          if (!response.access_token) {
+            reject(new Error('No access token returned by Google.'));
+            return;
+          }
+
+          const accessToken = response.access_token;
+
+          // Fetch user profile info
+          let userProfile: GoogleUserProfile = { email: 'Google Account User' };
+          try {
+            const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
+              headers: { Authorization: `Bearer ${accessToken}` },
+            });
+            if (userInfoRes.ok) {
+              userProfile = await userInfoRes.json();
+            }
+          } catch (uErr) {
+            console.warn('Could not fetch user profile details:', uErr);
+          }
+
+          setCachedAuth(accessToken, userProfile);
+          resolve({ user: userProfile, accessToken });
+        },
+        error_callback: (err) => {
+          if (handled) return;
+          handled = true;
+          console.error('GIS Error callback:', err);
+          reject(new Error(err?.message || 'Google Sign-in failed. Check popup blockers.'));
+        },
+      });
+
+      tokenClient.requestAccessToken({ prompt: 'consent' });
+    } catch (err: any) {
+      reject(err);
     }
   });
-};
+}
 
-export const googleSignIn = async (): Promise<{ user: User; accessToken: string }> => {
-  try {
-    isSigningIn = true;
-    const result = await signInWithPopup(auth, provider);
-    const credential = GoogleAuthProvider.credentialFromResult(result);
-    if (!credential?.accessToken) {
-      throw new Error('Google sign-in succeeded, but no OAuth access token was returned.');
+export async function googleLogout() {
+  const token = getCachedToken();
+  if (token && window.google?.accounts?.oauth2?.revoke) {
+    try {
+      window.google.accounts.oauth2.revoke(token, () => {});
+    } catch (e) {
+      // ignore
     }
-
-    setCachedToken(credential.accessToken);
-    return { user: result.user, accessToken: credential.accessToken };
-  } catch (error: any) {
-    console.error('Google Sign In Error:', error);
-    throw error;
-  } finally {
-    isSigningIn = false;
   }
-};
-
-export const googleLogout = async () => {
-  setCachedToken(null);
-  await signOut(auth);
-};
+  setCachedAuth(null, null);
+}
 
 // ==========================================
 // GOOGLE DRIVE & GOOGLE SHEETS API OPERATIONS
@@ -142,7 +261,7 @@ export async function syncLedgerToGoogleSheet(
 
   let spreadsheetId = existingSpreadsheetId;
 
-  // 1. If no spreadsheet ID exists or not found, create a new Google Sheet
+  // 1. If no spreadsheet ID exists, create a new Google Sheet
   if (!spreadsheetId) {
     const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
       method: 'POST',
@@ -353,7 +472,6 @@ export async function loadFileFromGoogleDrive(
   members: Member[];
   settings?: AppSettings;
 }> {
-  // First inspect file metadata
   const metaRes = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType`,
     {
@@ -386,7 +504,6 @@ export async function loadFileFromGoogleDrive(
       settings: json.settings,
     };
   } else if (meta.mimeType === 'application/vnd.google-apps.spreadsheet') {
-    // Read sheets
     const ledgerRes = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/'Ledger Entries'!A2:J10000`,
       {

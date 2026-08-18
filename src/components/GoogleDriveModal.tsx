@@ -88,7 +88,7 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
     setLoading(true);
     try {
       const result = await googleSignIn();
-      showToast(`Welcome ${result.user.displayName || result.user.email || 'User'}! Connected to Google Drive.`);
+      showToast(`Welcome ${result.user.name || result.user.email || 'User'}! Connected to Google Drive.`);
       onStatusUpdate();
       
       // Load drive files right after sign-in

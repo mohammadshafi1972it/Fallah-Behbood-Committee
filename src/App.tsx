@@ -10,7 +10,7 @@ import { ExcelManagerModal } from './components/ExcelManagerModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { ToastNotification } from './components/ToastNotification';
 import { FileText, Users, LayoutDashboard, CalendarCheck } from 'lucide-react';
-import { initAuth, getCachedToken, syncLedgerToGoogleSheet, auth } from './lib/googleDriveAuth';
+import { subscribeAuth, getCachedToken, getCachedUser, syncLedgerToGoogleSheet } from './lib/googleDriveAuth';
 
 const STORAGE_KEY = 'fbc-ledger-data';
 
@@ -60,7 +60,7 @@ export default function App() {
 
   // Update Google Auth Status
   const checkGoogleAuthStatus = useCallback(() => {
-    const user = auth.currentUser;
+    const user = getCachedUser();
     const token = getCachedToken();
     const isConnected = !!(user || token);
 
@@ -71,31 +71,17 @@ export default function App() {
     }));
   }, []);
 
-  // Initialize Firebase Auth listener & Load Initial Local Storage Data
+  // Initialize Auth listener & Load Initial Local Storage Data
   useEffect(() => {
-    // Subscribe to auth state
-    const unsubscribe = initAuth(
-      (user) => {
-        setStorageStatus((prev) => ({
-          ...prev,
-          isGoogleConnected: true,
-          googleUserEmail: user.email || 'Google Account Connected',
-        }));
-      },
-      () => {
-        const token = getCachedToken();
-        if (!token) {
-          setStorageStatus((prev) => ({
-            ...prev,
-            isGoogleConnected: false,
-            googleUserEmail: undefined,
-          }));
-        }
-      }
-    );
-
-    // Initial check
-    checkGoogleAuthStatus();
+    // Subscribe to Google auth state
+    const unsubscribe = subscribeAuth((user, token) => {
+      const isConnected = !!(user || token);
+      setStorageStatus((prev) => ({
+        ...prev,
+        isGoogleConnected: isConnected,
+        googleUserEmail: user?.email || (isConnected ? 'Google Account Connected' : undefined),
+      }));
+    });
 
     try {
       const raw = localStorage.getItem(STORAGE_KEY);
@@ -112,7 +98,7 @@ export default function App() {
     return () => {
       unsubscribe();
     };
-  }, [checkGoogleAuthStatus]);
+  }, []);
 
   // Save to LocalStorage on Change
   useEffect(() => {
