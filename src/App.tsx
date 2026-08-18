@@ -10,6 +10,7 @@ import { ExcelManagerModal } from './components/ExcelManagerModal';
 import { DeleteConfirmModal } from './components/DeleteConfirmModal';
 import { ToastNotification } from './components/ToastNotification';
 import { FileText, Users, LayoutDashboard, CalendarCheck } from 'lucide-react';
+import { initAuth, getCachedToken, syncLedgerToGoogleSheet, auth } from './lib/googleDriveAuth';
 
 const STORAGE_KEY = 'fbc-ledger-data';
 
@@ -57,25 +58,43 @@ export default function App() {
     setToastMsg(msg);
   }, []);
 
-  // Check Google OAuth Status
-  const checkGoogleAuthStatus = useCallback(async () => {
-    try {
-      const res = await fetch('/api/auth/google/status');
-      if (res.ok) {
-        const data = await res.json();
-        setStorageStatus((prev) => ({
-          ...prev,
-          isGoogleConnected: data.authenticated,
-          googleUserEmail: data.email,
-        }));
-      }
-    } catch (err) {
-      console.error('Failed to check Google auth status', err);
-    }
+  // Update Google Auth Status
+  const checkGoogleAuthStatus = useCallback(() => {
+    const user = auth.currentUser;
+    const token = getCachedToken();
+    const isConnected = !!(user || token);
+
+    setStorageStatus((prev) => ({
+      ...prev,
+      isGoogleConnected: isConnected,
+      googleUserEmail: user?.email || (isConnected ? 'Google Account Connected' : undefined),
+    }));
   }, []);
 
-  // Load Initial Data from LocalStorage
+  // Initialize Firebase Auth listener & Load Initial Local Storage Data
   useEffect(() => {
+    // Subscribe to auth state
+    const unsubscribe = initAuth(
+      (user) => {
+        setStorageStatus((prev) => ({
+          ...prev,
+          isGoogleConnected: true,
+          googleUserEmail: user.email || 'Google Account Connected',
+        }));
+      },
+      () => {
+        const token = getCachedToken();
+        if (!token) {
+          setStorageStatus((prev) => ({
+            ...prev,
+            isGoogleConnected: false,
+            googleUserEmail: undefined,
+          }));
+        }
+      }
+    );
+
+    // Initial check
     checkGoogleAuthStatus();
 
     try {
@@ -90,23 +109,10 @@ export default function App() {
       console.error('Failed to load local storage', e);
     }
 
-    // Check query params for Google auth redirect
-    const urlParams = new URLSearchParams(window.location.search);
-    if (urlParams.get('google_auth') === 'success') {
-      showToast('Google Account connected successfully!');
-      window.history.replaceState({}, document.title, window.location.pathname);
-      checkGoogleAuthStatus();
-    }
-
-    const handleMessage = (event: MessageEvent) => {
-      if (event.data?.type === 'OAUTH_AUTH_SUCCESS') {
-        showToast('Google Account connected successfully!');
-        checkGoogleAuthStatus();
-      }
+    return () => {
+      unsubscribe();
     };
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, [checkGoogleAuthStatus, showToast]);
+  }, [checkGoogleAuthStatus]);
 
   // Save to LocalStorage on Change
   useEffect(() => {
@@ -125,40 +131,36 @@ export default function App() {
 
   // Sync Now to Google Sheets
   const handleSyncGoogleNow = async () => {
-    if (!storageStatus.isGoogleConnected) {
+    const token = getCachedToken();
+    if (!token) {
       setIsDriveModalOpen(true);
       return;
     }
 
     try {
       setStorageStatus((prev) => ({ ...prev, syncing: true }));
-      const res = await fetch('/api/google/drive/sync-sheet', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          spreadsheetId: settings.linkedGoogleSheetId,
-          sheetTitle: `${settings.organizationName || 'Fallah Behbood Committee'} Ledger`,
-          data: { transactions, members, settings },
-        }),
+      const result = await syncLedgerToGoogleSheet(token, {
+        transactions,
+        members,
+        settings,
+        existingSpreadsheetId: settings.linkedGoogleSheetId,
       });
 
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setSettings((prev) => ({
-          ...prev,
-          linkedGoogleSheetId: data.spreadsheetId,
-          lastSyncedAt: data.syncedAt,
-        }));
-        setStorageStatus((prev) => ({
-          ...prev,
-          lastSyncedAt: data.syncedAt,
-        }));
-        showToast('Synced ledger & member data to Google Sheets!');
-      } else {
-        showToast('Failed to sync to Google Sheets: ' + (data.error || 'Error'));
-      }
-    } catch (err) {
-      showToast('Error syncing to Google Sheets');
+      setSettings((prev) => ({
+        ...prev,
+        linkedGoogleSheetId: result.spreadsheetId,
+        lastSyncedAt: result.syncedAt,
+      }));
+
+      setStorageStatus((prev) => ({
+        ...prev,
+        lastSyncedAt: result.syncedAt,
+      }));
+
+      showToast('Successfully synced ledger & members to Google Sheets!');
+    } catch (err: any) {
+      console.error('Sync error:', err);
+      showToast('Failed to sync to Google Sheets: ' + (err.message || 'Error'));
     } finally {
       setStorageStatus((prev) => ({ ...prev, syncing: false }));
     }
