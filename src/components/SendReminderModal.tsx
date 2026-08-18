@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { X, Send, Copy, Check, MessageSquare, Bell, Users, AlertCircle, Share2 } from 'lucide-react';
+import { X, Send, Copy, Check, MessageSquare, Bell, Users, AlertCircle, Share2, Sparkles, PhoneCall } from 'lucide-react';
 import { formatMoney } from '../lib/ledgerUtils';
 
 export interface OverdueMemberItem {
@@ -8,7 +8,9 @@ export interface OverdueMemberItem {
   outstanding: number;
   month: string;
   phone?: string;
-  status: 'Due' | 'Partial';
+  status: 'Due' | 'Partial' | 'Paid';
+  monthlyDue?: number;
+  paid?: number;
 }
 
 interface SendReminderModalProps {
@@ -35,19 +37,9 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
   const [copiedBatch, setCopiedBatch] = useState(false);
   const [activeTab, setActiveTab] = useState<'individual' | 'batch'>('individual');
   const [customPhone, setCustomPhone] = useState('');
-
-  useEffect(() => {
-    if (singleTarget) {
-      setSelectedMember(singleTarget);
-      setCustomPhone(singleTarget.phone || '');
-      setActiveTab('individual');
-    } else if (overdueMembers.length > 0) {
-      setSelectedMember(overdueMembers[0]);
-      setCustomPhone(overdueMembers[0].phone || '');
-    }
-  }, [singleTarget, overdueMembers, isOpen]);
-
-  if (!isOpen) return null;
+  const [templateStyle, setTemplateStyle] = useState<'bilingual' | 'english' | 'concise'>('bilingual');
+  const [customMessage, setCustomMessage] = useState('');
+  const [isEditingMessage, setIsEditingMessage] = useState(false);
 
   // Format month name e.g. "2026-08" -> "August 2026"
   const getMonthLabel = (mStr: string) => {
@@ -61,39 +53,80 @@ export const SendReminderModal: React.FC<SendReminderModalProps> = ({
   const monthLabel = getMonthLabel(selectedMonth);
   const orgName = organizationName || 'Fallah Behbood Committee';
 
-  // Individual message template
-  const generateIndividualMessage = (item: OverdueMemberItem) => {
-    return `Assalamu Alaikum / Dear ${item.name},
+  // Individual message templates
+  const buildIndividualMessage = (item: OverdueMemberItem, style: 'bilingual' | 'english' | 'concise') => {
+    if (style === 'bilingual') {
+      return `السلام علیکم ورحمۃ اللہ وبرکاتہ
+محترم ${item.name} صاحب (لیجر نمبر: ${item.ledgerNo})،
 
-Gentle reminder from ${orgName} regarding your monthly subscription due of Rs. ${item.outstanding} for ${monthLabel} (Ledger No. ${item.ledgerNo}).
+امید ہے آپ بخیر ہوں گے۔ ${orgName} کی طرف سے یاد دہانی کہ ماہ ${monthLabel} کی ماہانہ فلاحی فیس / چندہ مبلغ Rs. ${item.outstanding}/- ابھی تک واجب الادا ہے۔
 
-Kindly clear your pending dues at your earliest convenience.
+براہ کرم فلاحی امور کی بروقت انجام دہی کے لیے اپنے بقایا جات جلد از جلد ادا فرمائیں۔
+
+جزاکم اللہ خیراً و احسن الجزاء۔
+— انتظامیہ: ${orgName}`;
+    } else if (style === 'english') {
+      return `Assalamu Alaikum / Dear ${item.name},
+
+This is a gentle payment reminder from ${orgName} regarding your monthly subscription due of Rs. ${item.outstanding} for ${monthLabel} (Ledger No. ${item.ledgerNo}).
+
+Kindly clear your pending dues at your earliest convenience to support our welfare initiatives.
 
 JazakAllah Khair / Thank you.
-— ${orgName}`;
+— Management, ${orgName}`;
+    } else {
+      return `Reminder: Dear ${item.name} (L.No ${item.ledgerNo}), your monthly due for ${monthLabel} of Rs. ${item.outstanding} is pending with ${orgName}. Kindly clear at earliest. Thank you.`;
+    }
   };
 
   // Batch message template
   const generateBatchMessage = () => {
     const listLines = overdueMembers
-      .map((m, idx) => `${idx + 1}. L.No ${m.ledgerNo} - ${m.name}: Rs. ${m.outstanding}`)
+      .map((m, idx) => `${idx + 1}. Ledger #${m.ledgerNo} — ${m.name}: Rs. ${m.outstanding}`)
       .join('\n');
 
-    return `📢 *PENDING SUBSCRIPTION REMINDER — ${monthLabel.toUpperCase()}*
-*${orgName.toUpperCase()}*
+    const totalOutstandingSum = overdueMembers.reduce((sum, m) => sum + (m.outstanding || 0), 0);
 
-Dear Respected Members,
-Below is the list of members with outstanding monthly dues for ${monthLabel}. Kindly clear your pending dues soon:
+    return `📢 *ماہانہ فیس یاد دہانی / PENDING DUES REPORT — ${monthLabel.toUpperCase()}*
+🏢 *${orgName.toUpperCase()}*
+
+محترم اراکین کمیٹی،
+السلام علیکم، ماہ ${monthLabel} کے بقایا فلاحی چندہ کی تفصیل درج ذیل ہے:
 
 ${listLines}
 
-*Total Pending Members:* ${overdueMembers.length}
+📊 *کل بقایا ممبران (Total Pending):* ${overdueMembers.length}
+💰 *مجموعی واجب الادا رقم (Total Outstanding):* Rs. ${totalOutstandingSum}
 
-Thank you for your continued cooperation and support.
-— Management, ${orgName}`;
+آپ سب کے تعاون اور فلاحی جذبے کا بے حد شکریہ۔
+— انتظامیہ ${orgName}`;
   };
 
-  const currentMessage = selectedMember ? generateIndividualMessage(selectedMember) : '';
+  useEffect(() => {
+    if (singleTarget) {
+      setSelectedMember(singleTarget);
+      setCustomPhone(singleTarget.phone || '');
+      setActiveTab('individual');
+      setCustomMessage(buildIndividualMessage(singleTarget, templateStyle));
+      setIsEditingMessage(false);
+    } else if (overdueMembers.length > 0) {
+      const first = overdueMembers[0];
+      setSelectedMember(first);
+      setCustomPhone(first.phone || '');
+      setCustomMessage(buildIndividualMessage(first, templateStyle));
+      setIsEditingMessage(false);
+    }
+  }, [singleTarget, overdueMembers, isOpen]);
+
+  useEffect(() => {
+    if (selectedMember && !isEditingMessage) {
+      setCustomMessage(buildIndividualMessage(selectedMember, templateStyle));
+    }
+  }, [templateStyle, selectedMember]);
+
+  if (!isOpen) return null;
+
+  const currentMessage = customMessage || (selectedMember ? buildIndividualMessage(selectedMember, templateStyle) : '');
   const batchMessage = generateBatchMessage();
 
   const handleCopyIndividual = () => {
@@ -111,12 +144,22 @@ Thank you for your continued cooperation and support.
     setTimeout(() => setCopiedBatch(false), 2500);
   };
 
+  const cleanPhoneNumber = (phone: string) => {
+    let clean = phone.replace(/[^0-9]/g, '');
+    // If starts with 0 and is 11 digits (e.g. Pakistan 0300...), replace leading 0 with 92
+    if (clean.startsWith('0') && clean.length === 11) {
+      clean = '92' + clean.slice(1);
+    }
+    // If 10 digits without country code, assume subcontinent/India 91 if needed or leave as is
+    return clean;
+  };
+
   const handleSendWhatsApp = () => {
     if (!selectedMember) return;
     const text = encodeURIComponent(currentMessage);
+    const cleanPhone = cleanPhoneNumber(customPhone);
     let url = '';
-    const cleanPhone = customPhone.replace(/[^0-9]/g, '');
-    if (cleanPhone) {
+    if (cleanPhone && cleanPhone.length >= 10) {
       url = `https://wa.me/${cleanPhone}?text=${text}`;
     } else {
       url = `https://api.whatsapp.com/send?text=${text}`;
@@ -130,18 +173,23 @@ Thank you for your continued cooperation and support.
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4">
-      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full flex flex-col max-h-[90vh] overflow-hidden animate-in fade-in zoom-in-95 duration-150">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-xs p-3 sm:p-4 animate-in fade-in duration-150">
+      <div className="bg-white rounded-2xl shadow-2xl border border-slate-200 max-w-xl w-full flex flex-col max-h-[90vh] overflow-hidden animate-in zoom-in-95 duration-150">
         {/* Header */}
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white shrink-0">
           <div className="flex items-center gap-2.5">
-            <div className="p-2 bg-amber-500/20 text-amber-400 rounded-xl">
-              <Bell className="w-5 h-5" />
+            <div className="p-2 bg-emerald-500/20 text-emerald-400 rounded-xl">
+              <MessageSquare className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="text-sm font-bold tracking-tight">Send Payment Reminders</h3>
+              <h3 className="text-sm font-bold tracking-tight flex items-center gap-2">
+                <span>Send WhatsApp Due Reminders</span>
+                <span className="bg-emerald-500/20 text-emerald-300 text-[10px] px-2 py-0.5 rounded-full font-mono font-bold">
+                  {overdueMembers.length} Overdue
+                </span>
+              </h3>
               <p className="text-[11px] text-slate-300">
-                {monthLabel} — {overdueMembers.length} member(s) with pending dues
+                {monthLabel} • Monthly Dues & Payment Notifications
               </p>
             </div>
           </div>
@@ -164,7 +212,7 @@ Thank you for your continued cooperation and support.
             }`}
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>Individual Member Reminder</span>
+            <span>Individual Member Message</span>
           </button>
           <button
             onClick={() => setActiveTab('batch')}
@@ -205,6 +253,8 @@ Thank you for your continued cooperation and support.
                     if (found) {
                       setSelectedMember(found);
                       setCustomPhone(found.phone || '');
+                      setIsEditingMessage(false);
+                      setCustomMessage(buildIndividualMessage(found, templateStyle));
                     }
                   }}
                   className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-slate-800"
@@ -220,13 +270,13 @@ Thank you for your continued cooperation and support.
               {selectedMember && (
                 <>
                   {/* Summary Card */}
-                  <div className="bg-amber-50/70 border border-amber-200/80 rounded-xl p-3 flex items-center justify-between text-xs">
+                  <div className="bg-amber-50/80 border border-amber-200 rounded-xl p-3 flex items-center justify-between text-xs">
                     <div>
                       <span className="text-[10px] uppercase font-bold text-amber-800 block">
-                        Member Details
+                        Member Account
                       </span>
                       <strong className="text-slate-900 text-sm font-serif">{selectedMember.name}</strong>
-                      <span className="text-slate-500 block">Ledger No. {selectedMember.ledgerNo}</span>
+                      <span className="text-slate-500 block">Ledger #{selectedMember.ledgerNo}</span>
                     </div>
                     <div className="text-right">
                       <span className="text-[10px] uppercase font-bold text-amber-800 block">
@@ -235,32 +285,78 @@ Thank you for your continued cooperation and support.
                       <strong className="text-rose-700 text-sm font-mono font-bold">
                         {formatMoney(selectedMember.outstanding)}
                       </strong>
+                      <span className="text-[10px] text-slate-500 block">For {monthLabel}</span>
                     </div>
                   </div>
 
-                  {/* Phone Input */}
-                  <div>
-                    <label className="block text-xs font-semibold text-slate-700 mb-1">
-                      WhatsApp / Phone Number (Optional for direct messaging):
-                    </label>
-                    <input
-                      type="text"
-                      placeholder="e.g. 919876543210"
-                      value={customPhone}
-                      onChange={(e) => setCustomPhone(e.target.value)}
-                      className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-slate-800"
-                    />
+                  {/* Phone & Template Selector */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Recipient WhatsApp / Phone Number:
+                      </label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 919876543210 or 0300..."
+                        value={customPhone}
+                        onChange={(e) => setCustomPhone(e.target.value)}
+                        className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-slate-800"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold text-slate-700 mb-1">
+                        Message Language / Style:
+                      </label>
+                      <select
+                        value={templateStyle}
+                        onChange={(e) => {
+                          const style = e.target.value as any;
+                          setTemplateStyle(style);
+                          if (selectedMember) {
+                            setCustomMessage(buildIndividualMessage(selectedMember, style));
+                            setIsEditingMessage(false);
+                          }
+                        }}
+                        className="w-full text-xs font-medium px-3 py-2 border border-slate-200 rounded-xl bg-slate-50 focus:outline-none focus:border-slate-800 cursor-pointer"
+                      >
+                        <option value="bilingual">Urdu / Islamic (السلام علیکم)</option>
+                        <option value="english">Formal English</option>
+                        <option value="concise">Short & Concise SMS</option>
+                      </select>
+                    </div>
                   </div>
 
-                  {/* Message Preview */}
+                  {/* Message Preview / Live Editor */}
                   <div>
                     <div className="flex items-center justify-between mb-1">
-                      <label className="text-xs font-semibold text-slate-700">Reminder Message Preview:</label>
-                      <span className="text-[10px] text-slate-400">Ready to send</span>
+                      <label className="text-xs font-semibold text-slate-700 flex items-center gap-1.5">
+                        <span>WhatsApp Message Content</span>
+                        <span className="text-[10px] text-slate-400 font-normal">(Editable)</span>
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          if (selectedMember) {
+                            setCustomMessage(buildIndividualMessage(selectedMember, templateStyle));
+                            setIsEditingMessage(false);
+                            showToast('Message reset to default template.');
+                          }
+                        }}
+                        className="text-[10px] text-slate-500 hover:text-slate-800 underline cursor-pointer"
+                      >
+                        Reset to template
+                      </button>
                     </div>
-                    <div className="bg-slate-900 text-slate-100 p-3.5 rounded-xl text-xs font-sans whitespace-pre-wrap leading-relaxed font-normal border border-slate-800">
-                      {currentMessage}
-                    </div>
+                    <textarea
+                      rows={5}
+                      value={currentMessage}
+                      onChange={(e) => {
+                        setCustomMessage(e.target.value);
+                        setIsEditingMessage(true);
+                      }}
+                      className="w-full bg-slate-900 text-emerald-300 p-3 rounded-xl text-xs font-sans whitespace-pre-wrap leading-relaxed border border-slate-800 focus:outline-none focus:border-emerald-500 font-mono"
+                    />
                   </div>
                 </>
               )}
@@ -271,8 +367,8 @@ Thank you for your continued cooperation and support.
               <div className="bg-blue-50 border border-blue-200 rounded-xl p-3 flex items-start gap-2 text-xs text-blue-900">
                 <AlertCircle className="w-4 h-4 text-blue-600 shrink-0 mt-0.5" />
                 <p>
-                  Copy or share this formatted summary containing all {overdueMembers.length} members with
-                  pending subscription dues for {monthLabel}. Great for posting in management WhatsApp groups.
+                  Share this comprehensive formatted announcement containing all {overdueMembers.length} members with
+                  pending dues for {monthLabel} directly to your Committee WhatsApp group.
                 </p>
               </div>
 
@@ -292,7 +388,7 @@ Thank you for your continued cooperation and support.
         <div className="px-5 py-3.5 bg-slate-50 border-t border-slate-200 flex flex-wrap items-center justify-between gap-2 shrink-0">
           <button
             onClick={onClose}
-            className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition-colors"
+            className="px-4 py-2 text-xs font-semibold text-slate-600 hover:text-slate-800 hover:bg-slate-200/60 rounded-xl transition-colors cursor-pointer"
           >
             Close
           </button>
@@ -312,7 +408,7 @@ Thank you for your continued cooperation and support.
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-xs cursor-pointer"
               >
                 <Send className="w-4 h-4" />
-                <span>Send via WhatsApp</span>
+                <span>Open in WhatsApp</span>
               </button>
             </div>
           ) : (
@@ -330,7 +426,7 @@ Thank you for your continued cooperation and support.
                 className="inline-flex items-center gap-1.5 px-4 py-2 text-xs font-semibold text-white bg-emerald-600 hover:bg-emerald-700 rounded-xl transition-colors shadow-xs cursor-pointer"
               >
                 <Share2 className="w-4 h-4" />
-                <span>Share Group Summary</span>
+                <span>Share to WhatsApp Group</span>
               </button>
             </div>
           )}
@@ -339,3 +435,4 @@ Thank you for your continued cooperation and support.
     </div>
   );
 };
+
