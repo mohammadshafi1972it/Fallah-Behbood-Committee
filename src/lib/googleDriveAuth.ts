@@ -38,6 +38,7 @@ const SCOPES = [
 
 const TOKEN_STORAGE_KEY = 'fbc_google_access_token';
 const USER_STORAGE_KEY = 'fbc_google_user_profile';
+const CUSTOM_CLIENT_ID_KEY = 'fbc_custom_oauth_client_id';
 
 let cachedAccessToken: string | null = null;
 let cachedUserProfile: GoogleUserProfile | null = null;
@@ -51,6 +52,32 @@ try {
   if (savedUser) cachedUserProfile = JSON.parse(savedUser);
 } catch (e) {
   // ignore
+}
+
+export function getCustomClientId(): string {
+  try {
+    return localStorage.getItem(CUSTOM_CLIENT_ID_KEY) || '';
+  } catch (e) {
+    return '';
+  }
+}
+
+export function setCustomClientId(clientId: string): void {
+  try {
+    if (clientId && clientId.trim()) {
+      localStorage.setItem(CUSTOM_CLIENT_ID_KEY, clientId.trim());
+    } else {
+      localStorage.removeItem(CUSTOM_CLIENT_ID_KEY);
+    }
+  } catch (e) {
+    // ignore
+  }
+}
+
+export function getEffectiveClientId(): string {
+  const custom = getCustomClientId();
+  if (custom) return custom;
+  return firebaseConfig.oAuthClientId || '';
 }
 
 export function setCachedAuth(token: string | null, user: GoogleUserProfile | null) {
@@ -110,7 +137,6 @@ export function getCachedUser(): GoogleUserProfile | null {
 
 export function subscribeAuth(callback: (user: GoogleUserProfile | null, token: string | null) => void) {
   authListeners.push(callback);
-  // Trigger immediate current state
   callback(getCachedUser(), getCachedToken());
   return () => {
     const idx = authListeners.indexOf(callback);
@@ -127,7 +153,6 @@ async function ensureGoogleScriptLoaded(): Promise<void> {
     if (existing) {
       existing.addEventListener('load', () => resolve());
       existing.addEventListener('error', () => reject(new Error('Failed to load Google Identity client')));
-      // In case it already loaded
       if (window.google?.accounts?.oauth2) resolve();
       return;
     }
@@ -149,12 +174,12 @@ export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessT
   await ensureGoogleScriptLoaded();
 
   if (!window.google?.accounts?.oauth2) {
-    throw new Error('Google Identity Services not ready. Please try again.');
+    throw new Error('Google Identity Services not ready. Please refresh the page and try again.');
   }
 
-  const clientId = firebaseConfig.oAuthClientId;
+  const clientId = getEffectiveClientId();
   if (!clientId) {
-    throw new Error('OAuth Client ID is missing in configuration.');
+    throw new Error('OAuth Client ID is missing. Please configure a Client ID in the settings below.');
   }
 
   return new Promise((resolve, reject) => {
@@ -200,7 +225,7 @@ export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessT
           if (handled) return;
           handled = true;
           console.error('GIS Error callback:', err);
-          reject(new Error(err?.message || 'Google Sign-in failed. Check popup blockers.'));
+          reject(new Error(err?.message || 'Google Sign-in failed. Check popup blockers or registered JavaScript origins.'));
         },
       });
 
