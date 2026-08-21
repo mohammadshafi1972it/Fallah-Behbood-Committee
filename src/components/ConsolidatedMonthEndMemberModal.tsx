@@ -166,7 +166,7 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
                 </span>
               </div>
               <p className="text-xs text-slate-300">
-                12-Month Target: Rs. 1,800/yr (@150/mo) • Ledger #131: Rs. 3,600/yr (@300/mo) • Auto-calculated Paid Upto
+                From 1st September 2026 • Standard: @Rs. 150/mo • Haji Gh. Mohammad Mir (#131): @Rs. 300/mo • Baseline as on 31/08/2026
               </p>
             </div>
           </div>
@@ -195,12 +195,12 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-slate-500 block">Due Upto Month End</span>
+            <span className="text-[10px] uppercase font-bold text-slate-500 block">Total Due Upto Month</span>
             <span className="text-base font-bold font-mono text-slate-700">{formatMoney(kpis.grandDue)}</span>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-emerald-200 shadow-2xs">
-            <span className="text-[10px] uppercase font-bold text-emerald-700 block">Total Collected to Date</span>
+            <span className="text-[10px] uppercase font-bold text-emerald-700 block">Total Paid So Far</span>
             <span className="text-base font-bold font-mono text-emerald-700">{formatMoney(kpis.grandPaid)}</span>
           </div>
 
@@ -316,18 +316,20 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
                 <th className="py-2.5 px-3 text-center w-10">#</th>
                 <th className="py-2.5 px-3">Ledger #</th>
                 <th className="py-2.5 px-3">Member Name</th>
-                <th className="py-2.5 px-3 text-right">Monthly Rate (12M Total)</th>
-                <th className="py-2.5 px-3 text-right">Due Upto {monthRow.monthLabel}</th>
-                <th className="py-2.5 px-3 text-right">Paid to Date</th>
-                <th className="py-2.5 px-3 text-center">Paid Upto (Months)</th>
-                <th className="py-2.5 px-3 text-right">Month-End Balance</th>
+                <th className="py-2.5 px-3 text-right">Rate/Mo</th>
+                <th className="py-2.5 px-3 text-right">Bal on 31/08/26</th>
+                <th className="py-2.5 px-3 text-right">Due from Sep</th>
+                <th className="py-2.5 px-3 text-right">Total Due</th>
+                <th className="py-2.5 px-3 text-right">Paid So Far</th>
+                <th className="py-2.5 px-3 text-center">Paid Upto Month</th>
+                <th className="py-2.5 px-3 text-right">Pending / Net Balance</th>
                 <th className="py-2.5 px-3 text-center">Status</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-sans">
               {filteredAndSortedList.length === 0 ? (
                 <tr>
-                  <td colSpan={9} className="py-12 text-center text-slate-400 font-sans">
+                  <td colSpan={11} className="py-12 text-center text-slate-400 font-sans">
                     No members match the selected criteria.
                   </td>
                 </tr>
@@ -366,11 +368,20 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-600">
                         {formatMoney(m.monthlyDue)}/m
-                        <span className="block text-[10px] text-slate-400">
-                          (Target: {formatMoney(m.annualDue)})
-                        </span>
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono text-slate-600 text-[11px]">
+                        {m.previousDue > 0 ? (
+                          <span className="text-rose-700 font-bold">-{formatMoney(m.previousDue)}</span>
+                        ) : m.openingBalance > 0 ? (
+                          <span className="text-emerald-700 font-bold">+{formatMoney(m.openingBalance)}</span>
+                        ) : (
+                          <span className="text-slate-400">Nil (0)</span>
+                        )}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                        {formatMoney(m.accruedDueFromSept2026 || (m.monthIndex * m.monthlyDue))}
+                      </td>
+                      <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-900">
                         {formatMoney(m.cumulativeDueToDate)}
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">
@@ -381,11 +392,13 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
                           className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold font-mono ${
                             m.isFullYearPaid
                               ? 'bg-teal-100 text-teal-900 border border-teal-300'
+                              : m.paidUptoMonthName && m.paidUptoMonthName !== 'Pending 31/08/2026 Dues'
+                              ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
                               : 'bg-slate-100 text-slate-800'
                           }`}
                           title={m.paidUptoText}
                         >
-                          {m.paidUptoBadge}
+                          {m.paidUptoMonthName || m.paidUptoBadge}
                         </span>
                       </td>
                       <td className="py-2.5 px-3 text-right font-mono font-bold">
@@ -433,8 +446,10 @@ export const ConsolidatedMonthEndMemberModal: React.FC<ConsolidatedMonthEndMembe
                   <td colSpan={3} className="py-3 px-3 text-right uppercase font-sans">
                     Grand Total ({filteredAndSortedList.length} Members):
                   </td>
-                  <td className="py-3 px-3 text-right">{formatMoney(kpis.grandAnnual)}</td>
-                  <td className="py-3 px-3 text-right">{formatMoney(kpis.grandDue)}</td>
+                  <td className="py-3 px-3 text-right">—</td>
+                  <td className="py-3 px-3 text-right">—</td>
+                  <td className="py-3 px-3 text-right">—</td>
+                  <td className="py-3 px-3 text-right text-slate-900">{formatMoney(kpis.grandDue)}</td>
                   <td className="py-3 px-3 text-right text-emerald-800">{formatMoney(kpis.grandPaid)}</td>
                   <td className="py-3 px-3 text-center text-teal-800">{kpis.paidUpCount} Paid Up</td>
                   <td className="py-3 px-3 text-right text-slate-900">

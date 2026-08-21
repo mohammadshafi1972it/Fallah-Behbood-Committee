@@ -402,18 +402,18 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
           <div className="border border-slate-200 rounded-xl overflow-hidden shadow-2xs">
             <table className="w-full text-left border-collapse text-xs">
               <thead>
-                <tr className="bg-slate-800 text-white uppercase text-[10px] tracking-wider">
+                <tr className="bg-slate-800 text-white uppercase text-[10px] tracking-wider font-serif">
                   <th className="py-2.5 px-3 text-center w-10">#</th>
-                  <th className="py-2.5 px-3 w-20">Ledger #</th>
-                  <th className="py-2.5 px-3">Member Details</th>
-                  <th className="py-2.5 px-3 text-right">Monthly Rate</th>
-                  <th className="py-2.5 px-3 text-right">Previous Due (Manual)</th>
+                  <th className="py-2.5 px-3 w-16">Ledger #</th>
+                  <th className="py-2.5 px-3">Member Name</th>
+                  <th className="py-2.5 px-3 text-right">Rate/Mo</th>
+                  <th className="py-2.5 px-3 text-right">Bal on 31/08/26</th>
+                  <th className="py-2.5 px-3 text-right">Due from Sep</th>
                   <th className="py-2.5 px-3 text-right">Total Paid (Auto)</th>
-                  <th className="py-2.5 px-3 text-center">Receipts</th>
-                  <th className="py-2.5 px-3">Last Payment</th>
-                  <th className="py-2.5 px-3 text-right">Balance / Status</th>
+                  <th className="py-2.5 px-3 text-center">Paid Upto Month</th>
+                  <th className="py-2.5 px-3 text-right">Pending / Net Balance</th>
                   <th className="py-2.5 px-3 text-center">Status</th>
-                  <th className="py-2.5 px-2 text-center w-16">Action</th>
+                  <th className="py-2.5 px-2 text-center w-14">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-200">
@@ -439,13 +439,13 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                         </td>
                         <td className="py-2.5 px-3">
                           <div className="font-bold text-slate-900">{item.name}</div>
-                          {item.phone && <div className="text-[10px] text-slate-500">📱 {item.phone}</div>}
+                          {item.phone && <div className="text-[10px] text-slate-500 font-mono">📱 {item.phone}</div>}
                           {item.balanceNotes && (
                             <div className="text-[10px] text-amber-700 italic">Note: {item.balanceNotes}</div>
                           )}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono text-slate-600">
-                          {formatMoney(item.monthlyDue)}
+                          {formatMoney(item.monthlyDue)}/m
                         </td>
                         <td className="py-2.5 px-3 text-right">
                           <button
@@ -458,35 +458,40 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                                 ? 'text-emerald-700'
                                 : 'text-slate-400'
                             }`}
-                            title="Click to edit manual previous dues/opening balance"
+                            title="Click to edit manual previous dues/opening balance as on 31/08/2026"
                           >
                             {item.previousDue > 0 ? (
                               <span>
-                                {formatMoney(item.previousDue)} <span className="text-[9px] text-rose-600 font-bold">(Due)</span>
+                                -{formatMoney(item.previousDue)} <span className="text-[9px] text-rose-600 font-bold">(Due)</span>
                               </span>
                             ) : item.openingBalance !== 0 ? (
                               <span>
-                                {formatMoney(item.openingBalance)} <span className="text-[9px] text-emerald-600 font-bold">(Adv)</span>
+                                +{formatMoney(item.openingBalance)} <span className="text-[9px] text-emerald-600 font-bold">(Adv)</span>
                               </span>
                             ) : (
                               'Rs. 0'
                             )}
                           </button>
                         </td>
+                        <td className="py-2.5 px-3 text-right font-mono text-slate-600">
+                          {formatMoney(item.accruedDueFromSept2026 || 0)}
+                        </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">
                           {formatMoney(item.totalPaid)}
                         </td>
-                        <td className="py-2.5 px-3 text-center font-mono text-slate-600">
-                          {item.receiptsCount > 0 ? (
-                            <span className="px-1.5 py-0.5 bg-slate-100 rounded text-[11px]">
-                              {item.receiptsCount}
-                            </span>
-                          ) : (
-                            <span className="text-slate-300">—</span>
-                          )}
-                        </td>
-                        <td className="py-2.5 px-3 text-slate-600 whitespace-nowrap text-[11px]">
-                          {item.lastPaymentDate ? fmtDate(item.lastPaymentDate) : <span className="text-slate-400">None</span>}
+                        <td className="py-2.5 px-3 text-center">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-[11px] font-bold font-mono ${
+                              item.paidUptoMonthName && item.paidUptoMonthName !== 'Pending 31/08/2026 Dues'
+                                ? 'bg-emerald-100 text-emerald-900 border border-emerald-200'
+                                : item.isPaidUp
+                                ? 'bg-teal-100 text-teal-900 border border-teal-300'
+                                : 'bg-slate-100 text-slate-800'
+                            }`}
+                            title={item.paidUptoText}
+                          >
+                            {item.paidUptoMonthName || (item.paidUptoMonths > 0 ? `${item.paidUptoMonths} mo` : '0 mo')}
+                          </span>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-extrabold">
                           {isNil ? (
@@ -503,7 +508,7 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                                   : 'text-slate-700'
                               }`}
                             >
-                              {formatMoney(item.effectiveBalance)}
+                              {isNegative ? `-${formatMoney(Math.abs(item.effectiveBalance))}` : `+${formatMoney(item.effectiveBalance)}`}
                               {isPositive && <span className="text-[9px] ml-1 text-emerald-700 font-normal">Adv</span>}
                             </span>
                           )}

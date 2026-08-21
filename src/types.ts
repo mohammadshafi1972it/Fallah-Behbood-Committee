@@ -24,8 +24,8 @@ export interface Member {
   monthlyDue: number;
   phone?: string;
   address?: string;
-  openingBalance?: number; // Manual initial balance: positive = Advance/Credit, negative = Starting Arrears/Due
-  previousDue?: number; // Optional manual previous due / arrears from earlier periods
+  openingBalance?: number; // Manual initial balance as on 31/08/2026: positive = Advance/Credit, negative = Starting Arrears/Due
+  previousDue?: number; // Optional manual previous due / arrears as on 31/08/2026
   showNilBalanceWhenPaid?: boolean; // Optional: show balance as Nil when payment received >= due payment
   balanceNotes?: string;
   updatedAt?: string;
@@ -35,12 +35,15 @@ export interface MemberBalanceItem {
   member: Member;
   ledgerNo: string;
   name: string;
-  monthlyDue: number; // e.g. 150/mo, or 300/mo for Ledger 131
-  annualDue: number; // 12 Months target: 12 * 150 = 1800, or 12 * 300 = 3600 for Ledger 131
+  monthlyDue: number; // e.g. 150/mo, or 300/mo for Haji Gh. Mohammad Mir (Ledger #131)
+  annualDue: number; // 12 Months target from 01/09/2026: 12 * 150 = 1800, or 12 * 300 = 3600 for Haji Gh. Mohammad Mir
   phone?: string;
   address?: string;
-  openingBalance: number; // Manual starting balance (+ for advance, - for arrears)
-  previousDue: number; // Manual previous due / arrears amount
+  openingBalance: number; // Manual starting balance as on 31/08/2026 (+ for advance, - for arrears)
+  previousDue: number; // Manual previous due / arrears amount as on 31/08/2026
+  baselineAugust2026Balance: number; // Stored balance as on 31/08/2026
+  baselineAugust2026Due: number; // Stored arrears due as on 31/08/2026
+  accruedDueFromSept2026: number; // Accrued dues from 1st Sep 2026 to date
   totalDue: number; // Total expected due (previousDue + subscription dues)
   totalPaid: number; // Sum of all income payments recorded (automatically updated in real-time)
   subscriptionPaid: number; // Specific to subscription
@@ -49,15 +52,16 @@ export interface MemberBalanceItem {
   lastPaymentDate: string | null;
   effectiveBalance: number; // True mathematical balance: openingBalance + totalPaid
   balanceDue: number; // Outstanding due balance (0 / Nil when paid up and Nil option is active)
-  monthsPaid: number; // Number of full months paid (e.g. 4.0 or 12.0)
+  monthsPaid: number; // Number of full months paid from Sep 2026 (e.g. 4.0 or 12.0)
   monthsPaidExact: number; // Exact months paid (totalPaid / monthlyDue)
-  paidUptoText: string; // e.g. "Paid Upto: Full Year (12/12 Months - Nil)" or "Paid Upto: 4 Months (Rs. 600 / 1800)"
-  paidUptoBadge: string; // e.g. "12/12 Mos (Paid Up)" or "4/12 Mos"
-  paidUptoMonthName?: string; // e.g. "Month 12 (Full Year)" or "Month 4 (Jul)"
-  remainingMonthsDue: number; // 12 - monthsPaid (0 when paid up)
-  remainingAnnualDue: number; // annualDue - totalPaid (0 when paid up)
+  paidUptoText: string; // e.g. "Paid Upto: October 2026 (2 Months)" or "Paid Upto: Full Year (Aug 2027 — Nil)"
+  paidUptoBadge: string; // e.g. "Oct 2026 (2 Mos)" or "12/12 Mos (Paid Up)"
+  paidUptoMonthName: string; // e.g. "September 2026", "October 2026", "November 2026", "Full Session (Aug 2027)"
+  remainingMonthsDue: number; // Remaining months due from 12-month session
+  remainingAnnualDue: number; // annualDue - netPaid
+  pendingDueAmount: number; // Total due pending (0 if paid up or in advance)
   isPaidUp: boolean; // True when payment received is greater than or equal to due payment
-  isFullYearPaid: boolean; // True when payment received >= annual target (1800 or 3600 for #131)
+  isFullYearPaid: boolean; // True when payment received >= annual target (1800 or 3600 for Haji Gh. Mohammad Mir)
   showNilBalanceWhenPaid: boolean; // Whether the balance displays as Nil when paid up
   status: 'Paid Up (Nil)' | 'Advance' | 'Cleared' | 'Arrears' | 'Active';
   balanceNotes?: string;
@@ -65,11 +69,12 @@ export interface MemberBalanceItem {
 
 export interface MonthEndMemberBalanceItem extends MemberBalanceItem {
   asOfMonth: string; // YYYY-MM
-  asOfMonthLabel: string; // e.g. "June 2026"
-  monthIndex: number; // 1 to 12 in the session
-  cumulativeDueToDate: number; // Expected due up to this month end (monthIndex * monthlyDue + previousDue)
+  asOfMonthLabel: string; // e.g. "September 2026"
+  monthIndex: number; // 1 to 12 in the session (1 = Sep 2026, 2 = Oct 2026, etc.)
+  cumulativeDueToDate: number; // Expected due up to this month end (monthIndex * monthlyDue + previousDue as on 31/08/2026)
   cumulativePaidToDate: number; // Total payments made up to the end of this month
-  monthEndEffectiveBalance: number; // Balance as of month end: (cumulativePaidToDate - cumulativeDueToDate)
+  monthEndEffectiveBalance: number; // Balance as of month end: (openingBalance + cumulativePaidToDate - monthIndex * monthlyDue)
+  monthEndPendingDue: number; // Outstanding due pending in favor of member as of this month end
   monthEndStatus: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active';
   monthEndPaidUptoText: string;
 }

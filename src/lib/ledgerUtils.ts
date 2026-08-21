@@ -77,35 +77,94 @@ export function isLedger131(ledgerNo: string | number | undefined): boolean {
 }
 
 /**
- * Resolves the monthly contribution rate for a member.
+ * Checks if a member or ledger represents Haji Gh. Mohammad Mir (Ledger #131 or by name)
+ */
+export function isHajiGhMohammadMir(
+  memberOrLedger: Member | { ledgerNo: string; name?: string } | string | number | undefined
+): boolean {
+  if (!memberOrLedger) return false;
+  if (typeof memberOrLedger === 'string' || typeof memberOrLedger === 'number') {
+    return isLedger131(memberOrLedger);
+  }
+  if (isLedger131(memberOrLedger.ledgerNo)) return true;
+  const name = String(memberOrLedger.name || '').toLowerCase();
+  const isGhMohammad =
+    (name.includes('gh') || name.includes('ghulam') || name.includes('gh.')) &&
+    name.includes('mohammad') &&
+    name.includes('mir');
+  return isGhMohammad;
+}
+
+/**
+ * Resolves the monthly contribution rate for a member starting from 1st September 2026.
  * Default rule: Rs. 150/month (12 Months = Rs. 1,800)
- * Exception: Ledger Number 131 has monthly contribution of @Rs. 300/month (12 Months = Rs. 3,600)
+ * Exception: Haji Gh. Mohammad Mir (Ledger #131) has monthly contribution of @Rs. 300/month (12 Months = Rs. 3,600)
  */
 export function getMemberMonthlyDue(
-  memberOrLedger: Member | { ledgerNo: string; monthlyDue?: number } | string | number | undefined,
+  memberOrLedger: Member | { ledgerNo: string; name?: string; monthlyDue?: number } | string | number | undefined,
   defaultDue: number = 150
 ): number {
   if (!memberOrLedger) return defaultDue || 150;
 
-  if (typeof memberOrLedger === 'string' || typeof memberOrLedger === 'number') {
-    return isLedger131(memberOrLedger) ? 300 : (num(defaultDue) || 150);
-  }
-
-  const lNo = memberOrLedger.ledgerNo;
-  if (isLedger131(lNo)) {
-    // Ledger 131 defaults to 300/month unless explicitly set to a custom non-default value
-    if (memberOrLedger.monthlyDue !== undefined && memberOrLedger.monthlyDue > 0 && memberOrLedger.monthlyDue !== 150) {
-      return num(memberOrLedger.monthlyDue);
-    }
+  if (isHajiGhMohammadMir(memberOrLedger)) {
     return 300;
   }
 
-  return num(memberOrLedger.monthlyDue) || num(defaultDue) || 150;
+  if (typeof memberOrLedger === 'object' && memberOrLedger !== null) {
+    if (memberOrLedger.monthlyDue !== undefined && memberOrLedger.monthlyDue > 0 && memberOrLedger.monthlyDue !== 150) {
+      return num(memberOrLedger.monthlyDue);
+    }
+  }
+
+  return num(defaultDue) || 150;
+}
+
+export const SESSION_MONTH_NAMES = [
+  'September 2026',
+  'October 2026',
+  'November 2026',
+  'December 2026',
+  'January 2027',
+  'February 2027',
+  'March 2027',
+  'April 2027',
+  'May 2027',
+  'June 2027',
+  'July 2027',
+  'August 2027',
+];
+
+export const SESSION_MONTH_SHORT_NAMES = [
+  'Sep 2026',
+  'Oct 2026',
+  'Nov 2026',
+  'Dec 2026',
+  'Jan 2027',
+  'Feb 2027',
+  'Mar 2027',
+  'Apr 2027',
+  'May 2027',
+  'Jun 2027',
+  'Jul 2027',
+  'Aug 2027',
+];
+
+export function getSessionMonthIndexFromSept2026(asOfMonth: string): number {
+  if (!asOfMonth) return 1;
+  const [yearStr, monthStr] = asOfMonth.split('-');
+  const year = parseInt(yearStr, 10);
+  const month = parseInt(monthStr, 10);
+  if (isNaN(year) || isNaN(month)) return 1;
+
+  // Session starts at year 2026, month 9 (September 2026)
+  const diffMonths = (year - 2026) * 12 + (month - 9) + 1;
+  if (diffMonths < 1) return 1;
+  return Math.min(12, diffMonths);
 }
 
 export interface PaidUptoCalculation {
   monthlyDue: number;
-  annualDue: number; // 12 * monthlyDue (Rs. 1,800 or Rs. 3,600 for Ledger 131)
+  annualDue: number; // 12 * monthlyDue (Rs. 1,800 or Rs. 3,600 for Haji Gh. Mohammad Mir)
   monthsPaid: number;
   monthsPaidExact: number;
   isFullYearPaid: boolean;
@@ -117,53 +176,80 @@ export interface PaidUptoCalculation {
 }
 
 /**
- * Calculates automatically how many months have been paid up to and remaining dues
- * for a 12-Month fiscal session (@150=1800 or Ledger 131 @300=3600).
+ * Calculates automatically up to which month amount is paid so far starting from 1st September 2026,
+ * taking into account manual balance as on 31/08/2026 (previous dues or advance credit).
+ * Rate: @150/PM for standard members (12M = Rs. 1,800), @300/PM for Haji Gh. Mohammad Mir (12M = Rs. 3,600).
  */
 export function computePaidUptoInfo(
   totalPaid: number,
   monthlyDue: number,
-  previousDue: number = 0
+  previousDueAsOnAug31: number = 0,
+  openingAdvanceAsOnAug31: number = 0
 ): PaidUptoCalculation {
   const rate = Math.max(1, monthlyDue || 150);
-  const annualDue = rate * 12; // 12 Months: 12 * 150 = 1800, 12 * 300 = 3600
-  const netPaidForSubscription = Math.max(0, totalPaid - previousDue);
+  const annualDue = rate * 12; // 12 Months from Sep 2026: 12 * 150 = 1800, 12 * 300 = 3600
 
-  const monthsPaidExact = Math.round((netPaidForSubscription / rate) * 100) / 100;
-  const fullMonthsPaid = Math.min(12, Math.floor(netPaidForSubscription / rate));
-  const excessPartial = netPaidForSubscription % rate;
-  const isFullYearPaid = netPaidForSubscription >= annualDue;
+  // Available funds = total payments recorded + opening advance credit as on 31/08/2026
+  const totalAvailable = totalPaid + Math.max(0, openingAdvanceAsOnAug31);
+  const pastArrears = Math.max(0, previousDueAsOnAug31);
+
+  // Net payments available for September 2026 onwards after clearing 31/08/2026 dues
+  const netPaidForSession = Math.max(0, totalAvailable - pastArrears);
+
+  const monthsPaidExact = Math.round((netPaidForSession / rate) * 100) / 100;
+  const fullMonthsPaid = Math.min(12, Math.floor(netPaidForSession / rate));
+  const excessPartial = netPaidForSession % rate;
+  const isFullYearPaid = netPaidForSession >= annualDue;
 
   const remainingMonthsDue = Math.max(0, 12 - fullMonthsPaid);
-  const remainingAnnualDue = Math.max(0, annualDue - netPaidForSubscription);
+  const remainingAnnualDue = Math.max(0, annualDue - netPaidForSession);
 
   let paidUptoText = '';
   let paidUptoBadge = '';
   let paidUptoMonthName = '';
 
-  if (isFullYearPaid) {
-    const advanceExtra = netPaidForSubscription - annualDue;
+  if (pastArrears > 0 && totalAvailable < pastArrears) {
+    const unpaidx = pastArrears - totalAvailable;
+    paidUptoText = `Arrears pending as on 31/08/2026 (${formatMoney(unpaidx)} pending)`;
+    paidUptoBadge = `Pre-Sep Arrears (${formatMoney(unpaidx)})`;
+    paidUptoMonthName = 'Pending 31/08/2026 Dues';
+  } else if (isFullYearPaid) {
+    const advanceExtra = netPaidForSession - annualDue;
     if (advanceExtra > 0) {
-      paidUptoText = `Paid Upto: Full Year (12/12 Mos) + ${formatMoney(advanceExtra)} Adv`;
-      paidUptoBadge = `12/12 Mos (+${formatMoney(advanceExtra)})`;
+      paidUptoText = `Paid Upto: August 2027 (Full 12 Mos) + ${formatMoney(advanceExtra)} Adv`;
+      paidUptoBadge = `Aug 2027 (Full + ${formatMoney(advanceExtra)})`;
+      paidUptoMonthName = `August 2027 (Full Session + Adv)`;
     } else {
-      paidUptoText = `Paid Upto: Full Year (12/12 Mos — Nil Balance)`;
-      paidUptoBadge = `12/12 Mos (Paid Up)`;
+      paidUptoText = `Paid Upto: August 2027 (Full 12 Months — Nil Balance)`;
+      paidUptoBadge = `Aug 2027 (Paid Up)`;
+      paidUptoMonthName = 'August 2027 (Full 12 Months)';
     }
-    paidUptoMonthName = 'Month 12 (Full Year 100%)';
-  } else if (netPaidForSubscription > 0) {
-    if (excessPartial === 0) {
-      paidUptoText = `Paid Upto: ${fullMonthsPaid}/12 Mos (${formatMoney(netPaidForSubscription)} of ${formatMoney(annualDue)})`;
-      paidUptoBadge = `${fullMonthsPaid}/12 Mos (${formatMoney(remainingAnnualDue)} Due)`;
+  } else if (fullMonthsPaid > 0) {
+    const targetMonthIdx = fullMonthsPaid - 1;
+    const targetMonthFull = SESSION_MONTH_NAMES[targetMonthIdx] || `Month ${fullMonthsPaid}`;
+    const targetMonthShort = SESSION_MONTH_SHORT_NAMES[targetMonthIdx] || `M${fullMonthsPaid}`;
+
+    if (excessPartial > 0) {
+      paidUptoText = `Paid Upto: ${targetMonthFull} + ${formatMoney(excessPartial)} Partial (${fullMonthsPaid} Mos)`;
+      paidUptoBadge = `${targetMonthShort} (+${formatMoney(excessPartial)})`;
+      paidUptoMonthName = `${targetMonthFull} (+${formatMoney(excessPartial)})`;
     } else {
-      paidUptoText = `Paid Upto: ${fullMonthsPaid} Mos + ${formatMoney(excessPartial)} Partial (${formatMoney(netPaidForSubscription)} of ${formatMoney(annualDue)})`;
-      paidUptoBadge = `${fullMonthsPaid}M+ (${formatMoney(remainingAnnualDue)} Due)`;
+      paidUptoText = `Paid Upto: ${targetMonthFull} (${fullMonthsPaid}/12 Months)`;
+      paidUptoBadge = `${targetMonthShort} (${fullMonthsPaid} Mos)`;
+      paidUptoMonthName = targetMonthFull;
     }
-    paidUptoMonthName = `Month ${fullMonthsPaid} of 12`;
+  } else if (excessPartial > 0) {
+    paidUptoText = `Paid Upto: Partial September 2026 (${formatMoney(excessPartial)} of ${formatMoney(rate)})`;
+    paidUptoBadge = `Part. Sep 2026 (${formatMoney(excessPartial)})`;
+    paidUptoMonthName = `Partial September 2026`;
+  } else if (pastArrears > 0 && totalAvailable === pastArrears) {
+    paidUptoText = `Cleared upto 31/08/2026 (0/12 Mos for Sep 2026 session)`;
+    paidUptoBadge = `Cleared to 31/08/26`;
+    paidUptoMonthName = 'Cleared to 31/08/2026 (Due from Sep)';
   } else {
-    paidUptoText = `0 Months Paid (${formatMoney(annualDue)} Annual Due)`;
+    paidUptoText = `0 Months Paid for Sep 2026 session (${formatMoney(annualDue)} Annual Due)`;
     paidUptoBadge = `0/12 Mos (${formatMoney(annualDue)} Due)`;
-    paidUptoMonthName = '0 / 12 Months';
+    paidUptoMonthName = '0 / 12 Months (Due from Sep)';
   }
 
   return {
@@ -291,19 +377,27 @@ export function computeMemberBalanceList(
       lastPaymentDate = sorted[0].date;
     }
 
-    // Effective mathematical live balance = (Manual Opening Balance) + (Total Paid to Date)
+    // Effective mathematical live balance = (Manual Opening Balance as of 31/08/2026) + (Total Paid to Date)
     const effectiveBalance = openingBalance + totalPaid;
 
-    // Compute automatic Paid Upto calculation
-    const paidCalc = computePaidUptoInfo(totalPaid, monthlyDue, previousDue);
+    // Available funds = total payments + any advance opening credit as on 31/08/2026
+    const totalAvailable = totalPaid + Math.max(0, openingBalance);
 
-    // Total due target (previous arrears + annual 12-month baseline)
+    // Compute automatic Paid Upto calculation starting from 1st September 2026
+    const paidCalc = computePaidUptoInfo(
+      totalPaid,
+      monthlyDue,
+      previousDue,
+      openingBalance > 0 ? openingBalance : 0
+    );
+
+    // Total due target (previous arrears as on 31/08/2026 + 12-month annual session from 01/09/2026)
     const totalDue = previousDue > 0 ? previousDue + annualDue : annualDue;
 
     // Paid up when total payment received is greater than or equal to due payment or full annual target
     const isPaidUp =
       totalPaid > 0 &&
-      (paidCalc.isFullYearPaid || (previousDue > 0 ? totalPaid >= previousDue : effectiveBalance >= 0));
+      (paidCalc.isFullYearPaid || (previousDue > 0 ? totalAvailable >= previousDue : effectiveBalance >= 0));
 
     // When payment received is >= due payment and showNilBalanceWhenPaid is true, outstanding balance is Nil (0)
     let balanceDue = 0;
@@ -314,6 +408,8 @@ export function computeMemberBalanceList(
     } else if (annualDue > totalPaid) {
       balanceDue = annualDue - totalPaid;
     }
+
+    const pendingDueAmount = Math.max(0, totalDue - totalAvailable);
 
     // Balance status classification
     let status: 'Paid Up (Nil)' | 'Advance' | 'Cleared' | 'Arrears' | 'Active' = 'Active';
@@ -339,6 +435,9 @@ export function computeMemberBalanceList(
       address: m.address || '',
       openingBalance,
       previousDue,
+      baselineAugust2026Balance: openingBalance,
+      baselineAugust2026Due: previousDue,
+      accruedDueFromSept2026: annualDue,
       totalDue,
       totalPaid,
       subscriptionPaid,
@@ -354,6 +453,7 @@ export function computeMemberBalanceList(
       paidUptoMonthName: paidCalc.paidUptoMonthName,
       remainingMonthsDue: paidCalc.remainingMonthsDue,
       remainingAnnualDue: paidCalc.remainingAnnualDue,
+      pendingDueAmount,
       isPaidUp,
       isFullYearPaid: paidCalc.isFullYearPaid,
       showNilBalanceWhenPaid,
@@ -727,13 +827,14 @@ export function exportAllMembersBalanceExcel(
 }
 
 /**
- * Computes consolidated month-end member balances as of a specific month end.
- * Calculates cumulative dues vs actual payments, paid-upto status, and balances.
+ * Computes consolidated month-end member balances as of a specific month end,
+ * calculating from 1st September 2026 onwards with baseline balance as on 31/08/2026.
+ * Rates: @Rs. 150/PM for standard members, @Rs. 300/PM for Haji Gh. Mohammad Mir (Ledger #131).
  */
 export function computeMonthEndMemberBalances(
   members: Member[],
   transactions: Transaction[],
-  asOfMonth: string, // YYYY-MM
+  asOfMonth: string, // YYYY-MM (e.g. '2026-09', '2026-10')
   memberBalanceOverrides?: Record<
     string,
     {
@@ -744,18 +845,8 @@ export function computeMonthEndMemberBalances(
     }
   >
 ): MonthEndMemberBalanceItem[] {
-  // Collect all months sorted to determine month index (1 to 12)
-  const monthSet = new Set<string>();
-  transactions.forEach((t) => {
-    if (t.date && t.date.length >= 7) monthSet.add(t.date.slice(0, 7));
-    if (t.forMonth && t.forMonth.length >= 7) monthSet.add(t.forMonth.slice(0, 7));
-  });
-  if (asOfMonth) monthSet.add(asOfMonth);
-  const sortedMonths = Array.from(monthSet).sort();
-
-  let monthIndex = sortedMonths.indexOf(asOfMonth) + 1;
-  if (monthIndex <= 0) monthIndex = 1;
-  if (monthIndex > 12) monthIndex = 12;
+  // Determine session month index from September 2026 (1 = Sep 2026, 2 = Oct 2026, etc.)
+  const monthIndex = getSessionMonthIndexFromSept2026(asOfMonth);
 
   // Filter transactions recorded up to asOfMonth
   const incomeTxnsToDate = transactions.filter((t) => {
@@ -767,34 +858,46 @@ export function computeMonthEndMemberBalances(
   const baseList = computeMemberBalanceList(members, incomeTxnsToDate, memberBalanceOverrides);
 
   return baseList.map((item) => {
-    const monthlyRate = item.monthlyDue; // 150 or 300 for 131
-    const cumulativeDueToDate = (monthIndex * monthlyRate) + item.previousDue;
+    const monthlyRate = item.monthlyDue; // 150 or 300 for Haji Gh. Mohammad Mir
+    const accruedDueFromSept2026 = monthIndex * monthlyRate; // e.g. 1M = 150/300, 2M = 300/600
+    const cumulativeDueToDate = accruedDueFromSept2026 + item.previousDue;
     const cumulativePaidToDate = item.totalPaid;
-    const monthEndEffectiveBalance = item.openingBalance + cumulativePaidToDate - (monthIndex * monthlyRate);
+    const totalAvailableToDate = cumulativePaidToDate + (item.openingBalance > 0 ? item.openingBalance : 0);
 
-    const isMonthEndPaidUp = cumulativePaidToDate >= cumulativeDueToDate || item.isFullYearPaid;
+    const monthEndEffectiveBalance =
+      item.openingBalance + cumulativePaidToDate - accruedDueFromSept2026;
+    const monthEndPendingDue = Math.max(0, cumulativeDueToDate - totalAvailableToDate);
+
+    const isMonthEndPaidUp = totalAvailableToDate >= cumulativeDueToDate || item.isFullYearPaid;
 
     let monthEndStatus: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active' = 'Active';
-    if (cumulativePaidToDate > cumulativeDueToDate) {
+    if (totalAvailableToDate > cumulativeDueToDate) {
       monthEndStatus = 'Advance';
     } else if (isMonthEndPaidUp && item.showNilBalanceWhenPaid) {
       monthEndStatus = 'Paid Up (Nil)';
-    } else if (cumulativePaidToDate === cumulativeDueToDate) {
+    } else if (totalAvailableToDate === cumulativeDueToDate) {
       monthEndStatus = 'Cleared';
-    } else if (cumulativePaidToDate < cumulativeDueToDate) {
+    } else {
       monthEndStatus = 'Arrears';
     }
 
-    const paidInfo = computePaidUptoInfo(cumulativePaidToDate, monthlyRate, item.previousDue);
+    const paidInfo = computePaidUptoInfo(
+      cumulativePaidToDate,
+      monthlyRate,
+      item.previousDue,
+      item.openingBalance > 0 ? item.openingBalance : 0
+    );
 
     return {
       ...item,
       asOfMonth,
       asOfMonthLabel: getMonthLabel(asOfMonth),
       monthIndex,
+      accruedDueFromSept2026,
       cumulativeDueToDate,
       cumulativePaidToDate,
       monthEndEffectiveBalance,
+      monthEndPendingDue,
       monthEndStatus,
       monthEndPaidUptoText: paidInfo.paidUptoText,
     };
@@ -874,7 +977,7 @@ export function printMonthEndConsolidatedMemberPDF(
         balanceDisplay = `<span style="color:#334155; font-weight:bold;">${formatMoney(0)}</span>`;
       }
 
-      const is131 = isLedger131(item.ledgerNo);
+      const is131 = isLedger131(item.ledgerNo) || isHajiGhMohammadMir(item);
 
       return `
         <tr style="${is131 ? 'background-color:#fffbeb;' : ''}">
@@ -888,16 +991,21 @@ export function printMonthEndConsolidatedMemberPDF(
           </td>
           <td style="text-align:right; font-family:monospace; color:#475569;">
             ${formatMoney(item.monthlyDue)}/m
-            <div style="font-size:7pt; color:#64748b;">(12M: ${formatMoney(item.annualDue)})</div>
           </td>
-          <td style="text-align:right; font-family:monospace; color:#64748b;">
+          <td style="text-align:right; font-family:monospace; color:#64748b; font-size:8pt;">
+            ${item.previousDue > 0 ? `<span style="color:#b91c1c;">-${formatMoney(item.previousDue)}</span>` : item.openingBalance > 0 ? `<span style="color:#166534;">+${formatMoney(item.openingBalance)}</span>` : 'Nil (0)'}
+          </td>
+          <td style="text-align:right; font-family:monospace; color:#475569;">
+            ${formatMoney(item.accruedDueFromSept2026 || (item.monthIndex * item.monthlyDue))}
+          </td>
+          <td style="text-align:right; font-family:monospace; font-weight:bold; color:#1e293b;">
             ${formatMoney(item.cumulativeDueToDate)}
           </td>
           <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
             ${formatMoney(item.cumulativePaidToDate)}
           </td>
-          <td style="text-align:center; font-size:8pt; font-family:sans-serif; color:${item.isFullYearPaid ? '#0f766e' : '#475569'}; font-weight:600;">
-            ${item.paidUptoBadge}
+          <td style="text-align:center; font-size:8pt; font-family:sans-serif; color:${item.isFullYearPaid ? '#0f766e' : '#475569'}; font-weight:bold;">
+            ${item.paidUptoMonthName || item.paidUptoBadge}
           </td>
           <td style="text-align:right; font-family:monospace; font-size:9.5pt; background:${
             isPositive ? '#f0fdf4' : isNil ? '#f0fdfa' : isNegative ? '#fef2f2' : 'transparent'
@@ -915,7 +1023,7 @@ export function printMonthEndConsolidatedMemberPDF(
     <html lang="en">
     <head>
       <meta charset="utf-8"/>
-      <title>Consolidated Month-End Member Balance Statement — ${monthRow.monthLabel} — ${organizationName}</title>
+      <title>Consolidated Member Balance Statement — ${monthRow.monthLabel} — ${organizationName}</title>
       <style>
         @page { size: A4 ${orientation}; margin: 10mm; }
         body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; margin: 0; padding: 10px; font-size: 9pt; line-height: 1.4; }
@@ -947,7 +1055,7 @@ export function printMonthEndConsolidatedMemberPDF(
       <div class="header">
         <h1>${organizationName || 'Fallah Behbood Committee'}</h1>
         <p>${subTitle} • Pampore, Kashmir</p>
-        <div class="meta">CONSOLIDATED MEMBER BALANCE LIST — AS OF ${monthRow.monthLabel.toUpperCase()} (${sessionTag})</div>
+        <div class="meta">CONSOLIDATED MEMBER BALANCE STATEMENT — AS OF ${monthRow.monthLabel.toUpperCase()} (FROM 01/09/2026)</div>
       </div>
 
       <div class="kpi-container">
@@ -979,11 +1087,13 @@ export function printMonthEndConsolidatedMemberPDF(
             <th style="width:25px; text-align:center;">#</th>
             <th style="width:65px;">Ledger #</th>
             <th>Member Name</th>
-            <th style="text-align:right; width:85px;">Monthly Rate (12M Total)</th>
-            <th style="text-align:right; width:85px;">Due Upto Month End</th>
-            <th style="text-align:right; width:85px;">Paid to Date</th>
-            <th style="text-align:center; width:90px;">Paid Upto (Status)</th>
-            <th style="text-align:right; width:95px;">Month-End Balance</th>
+            <th style="text-align:right; width:75px;">Rate/Mo</th>
+            <th style="text-align:right; width:80px;">Bal on 31/08/26</th>
+            <th style="text-align:right; width:75px;">Due from Sep</th>
+            <th style="text-align:right; width:80px;">Total Due</th>
+            <th style="text-align:right; width:80px;">Paid So Far</th>
+            <th style="text-align:center; width:110px;">Paid Upto Month</th>
+            <th style="text-align:right; width:85px;">Pending/Balance</th>
             <th style="text-align:center; width:65px;">Status</th>
           </tr>
         </thead>
@@ -993,8 +1103,10 @@ export function printMonthEndConsolidatedMemberPDF(
             <td colspan="3" style="text-align:right; font-weight:bold; text-transform:uppercase;">
               CONSOLIDATED TOTAL (${memberBalances.length} MEMBERS):
             </td>
-            <td style="text-align:right; font-family:monospace;">${formatMoney(grandAnnual)} (12M)</td>
-            <td style="text-align:right; font-family:monospace; color:#475569;">
+            <td style="text-align:right; font-family:monospace;">—</td>
+            <td style="text-align:right; font-family:monospace;">—</td>
+            <td style="text-align:right; font-family:monospace;">—</td>
+            <td style="text-align:right; font-family:monospace; color:#1e293b;">
               ${formatMoney(grandDueToDate)}
             </td>
             <td style="text-align:right; font-family:monospace; color:#065f46; font-size:9.5pt;">
@@ -1065,45 +1177,60 @@ export function exportMonthEndConsolidatedMemberExcel(
       'Address',
       'Monthly Rate (Rs.)',
       '12-Month Target (Rs.)',
-      `Due Upto ${monthRow.monthLabel} (Rs.)`,
-      'Total Paid to Date (Rs.)',
-      'Paid Upto (Months)',
+      'Balance as on 31/08/2026 (Rs.)',
+      'Dues Accrued from 01/09/2026 (Rs.)',
+      `Total Due to Date Upto ${monthRow.monthLabel} (Rs.)`,
+      'Total Amount Paid So Far (Rs.)',
+      'Paid Upto Month Name',
       'Paid Upto Description',
-      'Month-End Balance (Rs.)',
+      'Pending Due Amount (Rs.)',
+      'Month-End Net Balance (Rs.)',
       'Display Balance',
       'Month-End Status',
       'Full Year Paid Up',
       'Balance Notes / Remarks',
     ],
-    ...memberBalances.map((m, idx) => [
-      idx + 1,
-      m.ledgerNo,
-      m.name,
-      m.phone || '',
-      m.address || '',
-      m.monthlyDue,
-      m.annualDue,
-      m.cumulativeDueToDate,
-      m.cumulativePaidToDate,
-      m.paidUptoBadge,
-      m.paidUptoText,
-      m.monthEndEffectiveBalance,
-      (m.isPaidUp || m.monthEndStatus === 'Paid Up (Nil)') && m.showNilBalanceWhenPaid && m.monthEndEffectiveBalance <= 0 ? 'Nil' : m.monthEndEffectiveBalance,
-      m.monthEndStatus,
-      m.isFullYearPaid ? 'YES (12/12)' : 'NO',
-      m.balanceNotes || '',
-    ]),
+    ...memberBalances.map((item, idx) => {
+      const isNil =
+        (item.isPaidUp || item.monthEndStatus === 'Paid Up (Nil)') &&
+        item.showNilBalanceWhenPaid &&
+        item.monthEndEffectiveBalance <= 0;
+
+      return [
+        idx + 1,
+        item.ledgerNo,
+        item.name,
+        item.phone || '',
+        item.address || '',
+        item.monthlyDue,
+        item.annualDue,
+        item.previousDue > 0 ? -item.previousDue : item.openingBalance > 0 ? item.openingBalance : 0,
+        item.accruedDueFromSept2026 || (item.monthIndex * item.monthlyDue),
+        item.cumulativeDueToDate,
+        item.cumulativePaidToDate,
+        item.paidUptoMonthName,
+        item.paidUptoText,
+        item.monthEndPendingDue || 0,
+        item.monthEndEffectiveBalance,
+        isNil ? 'Nil (Paid Up)' : item.monthEndEffectiveBalance,
+        item.monthEndStatus,
+        item.isFullYearPaid ? 'Yes' : 'No',
+        item.balanceNotes || '',
+      ];
+    }),
   ];
 
   // Add Grand Total row
   let grandDueToDate = 0;
   let grandPaidToDate = 0;
   let grandAnnual = 0;
+  let grandPending = 0;
 
   memberBalances.forEach((m) => {
     grandDueToDate += m.cumulativeDueToDate;
     grandPaidToDate += m.cumulativePaidToDate;
     grandAnnual += m.annualDue;
+    grandPending += m.monthEndPendingDue || 0;
   });
 
   data.push([
@@ -1114,14 +1241,17 @@ export function exportMonthEndConsolidatedMemberExcel(
     '—',
     '—',
     grandAnnual,
+    '—',
+    '—',
     grandDueToDate,
     grandPaidToDate,
     '—',
     '—',
+    grandPending,
     grandPaidToDate - grandDueToDate,
     '—',
-    'Audited',
-    'Consolidated Month-End Statement',
+    'AUDITED',
+    '—',
     '',
   ]);
 

@@ -127,11 +127,11 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
             <DollarSign className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-              <span>Manual Member Balance Configuration</span>
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2 flex-wrap">
+              <span>Member Balance as on 31/08/2026</span>
               {is131 ? (
                 <span className="text-[10px] font-sans font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full">
-                  Special Rate: Rs. 300/mo (12M: Rs. 3,600)
+                  Haji Gh. Mohammad Mir: Rs. 300/mo (12M: Rs. 3,600)
                 </span>
               ) : (
                 <span className="text-[10px] font-sans font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full">
@@ -140,8 +140,8 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
               )}
             </h3>
             <p className="text-xs text-slate-500">
-              Configure previous dues & automatic live balance for{' '}
-              <strong className="text-slate-800">{member.name}</strong> (Ledger #{member.ledgerNo})
+              Set baseline balance as on <strong>31/08/2026</strong> for{' '}
+              <strong className="text-slate-800">{member.name}</strong> (Ledger #{member.ledgerNo}) to auto-calculate dues from 1st September 2026.
             </p>
           </div>
         </div>
@@ -150,12 +150,13 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
         <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 mb-5 text-xs text-emerald-950 space-y-1.5 shadow-2xs">
           <div className="font-bold flex items-center gap-1.5 text-emerald-900">
             <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
-            <span>Automatic Live Balance & Nil Paid-Up Logic:</span>
+            <span>Automatic Calculation from 1st September 2026:</span>
           </div>
           <p className="text-[11px] text-emerald-800 leading-relaxed">
-            • <strong>Monthly Due:</strong> Rs. {memberMonthlyRate}/month (12 Months target: Rs. {annualTarget.toLocaleString()}).<br />
-            • <strong>Auto-Updating:</strong> Live balance automatically updates whenever a payment is received in the ledger.<br />
-            • <strong>Nil on Paid-Up:</strong> When payment received is greater than or equal to due payment, the balance is shown as <strong>Nil (Paid Up)</strong>.
+            • <strong>Monthly Rate:</strong> Rs. {memberMonthlyRate}/month from 01/09/2026 onwards (Annual target: Rs. {annualTarget.toLocaleString()}).<br />
+            • <strong>31/08/2026 Balance:</strong> Unpaid dues on 31/08/2026 are cleared first before crediting September 2026 onwards.<br />
+            • <strong>Paid Upto Tracking:</strong> Tracks exactly up to which month subscription is paid so far (e.g. Sep 2026, Oct 2026...).<br />
+            • <strong>Nil on Paid-Up:</strong> When payment received is greater than or equal to due payment, balance shows as <strong>Nil (Paid Up)</strong>.
           </p>
         </div>
 
@@ -163,7 +164,7 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
           {/* Previous / Opening Balance Mode Selector */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1.5">
-              1. Manual Balance Setting Type
+              1. Balance Type as on 31/08/2026
             </label>
             <div className="grid grid-cols-2 gap-2">
               <button
@@ -177,8 +178,8 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
               >
                 <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
                 <div>
-                  <div>Previous Due (Arrears)</div>
-                  <div className="text-[10px] font-normal text-rose-700">Past unpaid dues</div>
+                  <div>Previous Due (as on 31/08/2026)</div>
+                  <div className="text-[10px] font-normal text-rose-700">Past unpaid arrears</div>
                 </div>
               </button>
 
@@ -193,8 +194,8 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
               >
                 <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
                 <div>
-                  <div>Advance / Credit</div>
-                  <div className="text-[10px] font-normal text-emerald-700">Prepaid balance</div>
+                  <div>Advance / Credit (on 31/08/2026)</div>
+                  <div className="text-[10px] font-normal text-emerald-700">Prepaid advance balance</div>
                 </div>
               </button>
             </div>
@@ -204,8 +205,8 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               {balanceMode === 'previous_due'
-                ? 'Manual Previous Due Amount (Rs.)'
-                : 'Manual Advance / Credit Amount (Rs.)'}
+                ? 'Previous Due Amount as on 31/08/2026 (Rs.)'
+                : 'Advance / Credit Amount as on 31/08/2026 (Rs.)'}
             </label>
             <div className="relative">
               <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-slate-400">
