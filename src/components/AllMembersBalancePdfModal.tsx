@@ -59,29 +59,35 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
   // Summary KPI Calculations
   const stats = useMemo(() => {
     let totalOpening = 0;
+    let totalPreviousDue = 0;
     let totalPaid = 0;
     let totalEffective = 0;
     let totalReceipts = 0;
     let activePayers = 0;
+    let paidUpCount = 0;
     let advanceCount = 0;
     let arrearsCount = 0;
     let clearedCount = 0;
 
     allMemberBalances.forEach((m) => {
       totalOpening += m.openingBalance;
+      totalPreviousDue += m.previousDue;
       totalPaid += m.totalPaid;
       totalEffective += m.effectiveBalance;
       totalReceipts += m.receiptsCount;
       if (m.totalPaid > 0) activePayers++;
+      if (m.isPaidUp || m.status === 'Paid Up (Nil)') paidUpCount++;
       if (m.status === 'Advance') advanceCount++;
       else if (m.status === 'Arrears') arrearsCount++;
-      else if (m.status === 'Cleared') clearedCount++;
+      else if (m.status === 'Cleared' || m.status === 'Paid Up (Nil)') clearedCount++;
     });
 
     return {
       totalMembers: allMemberBalances.length,
       activePayers,
+      paidUpCount,
       totalOpening,
+      totalPreviousDue,
       totalPaid,
       totalEffective,
       totalReceipts,
@@ -97,14 +103,16 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
 
     // Status filter
     if (statusFilter !== 'All') {
-      if (statusFilter === 'Advance') {
+      if (statusFilter === 'PaidUp') {
+        list = list.filter((m) => m.isPaidUp || m.status === 'Paid Up (Nil)');
+      } else if (statusFilter === 'Advance') {
         list = list.filter((m) => m.status === 'Advance');
       } else if (statusFilter === 'Arrears') {
         list = list.filter((m) => m.status === 'Arrears');
       } else if (statusFilter === 'Cleared') {
-        list = list.filter((m) => m.status === 'Cleared');
+        list = list.filter((m) => m.status === 'Cleared' || m.status === 'Paid Up (Nil)');
       } else if (statusFilter === 'WithOpening') {
-        list = list.filter((m) => m.openingBalance !== 0);
+        list = list.filter((m) => m.openingBalance !== 0 || m.previousDue > 0);
       } else if (statusFilter === 'WithPayments') {
         list = list.filter((m) => m.totalPaid > 0);
       }
@@ -289,11 +297,19 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
-            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Manual Opening</div>
-            <div className={`text-base font-extrabold mt-0.5 font-mono ${stats.totalOpening >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-              {formatMoney(stats.totalOpening)}
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Paid Up (Nil)</div>
+            <div className="text-base font-extrabold text-emerald-700 mt-0.5">
+              {stats.paidUpCount} <span className="text-xs font-normal text-slate-500">members</span>
             </div>
-            <div className="text-[10px] text-slate-400">Baseline balance</div>
+            <div className="text-[10px] text-emerald-600 font-medium">Payment ≥ Due</div>
+          </div>
+
+          <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Manual Previous Dues</div>
+            <div className="text-base font-extrabold text-rose-700 mt-0.5 font-mono">
+              {formatMoney(stats.totalPreviousDue > 0 ? stats.totalPreviousDue : Math.abs(Math.min(0, stats.totalOpening)))}
+            </div>
+            <div className="text-[10px] text-slate-400">Past period baseline</div>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
@@ -305,27 +321,19 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
-            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Effective Balance</div>
-            <div className={`text-base font-extrabold mt-0.5 font-mono ${stats.totalEffective >= 0 ? 'text-emerald-800' : 'text-rose-800'}`}>
-              {formatMoney(stats.totalEffective)}
-            </div>
-            <div className="text-[10px] text-slate-400">Net member funds</div>
-          </div>
-
-          <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
             <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Advance Credits</div>
             <div className="text-base font-extrabold text-emerald-600 mt-0.5">
               {stats.advanceCount} <span className="text-xs font-normal text-slate-500">members</span>
             </div>
-            <div className="text-[10px] text-emerald-700">Positive balance</div>
+            <div className="text-[10px] text-emerald-700">Surplus balance</div>
           </div>
 
           <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-2xs">
-            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Arrears / Due</div>
+            <div className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Arrears / Pending</div>
             <div className="text-base font-extrabold text-rose-600 mt-0.5">
               {stats.arrearsCount} <span className="text-xs font-normal text-slate-500">members</span>
             </div>
-            <div className="text-[10px] text-rose-700">Negative balance</div>
+            <div className="text-[10px] text-rose-700">Due &gt; Paid</div>
           </div>
         </div>
 
@@ -359,10 +367,11 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                 className="px-2.5 py-1.5 border border-slate-300 rounded-lg bg-white font-medium text-slate-700 focus:outline-none focus:ring-2 focus:ring-emerald-400"
               >
                 <option value="All">All Members ({allMemberBalances.length})</option>
+                <option value="PaidUp">Paid Up / Nil ({stats.paidUpCount})</option>
                 <option value="Advance">Advance Balance ({stats.advanceCount})</option>
                 <option value="Arrears">Arrears / Due ({stats.arrearsCount})</option>
                 <option value="Cleared">Cleared (0 Balance)</option>
-                <option value="WithOpening">Has Manual Opening Bal</option>
+                <option value="WithOpening">Has Manual Previous/Opening</option>
                 <option value="WithPayments">Has Payment Entries</option>
               </select>
             </div>
@@ -397,12 +406,12 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                   <th className="py-2.5 px-3 text-center w-10">#</th>
                   <th className="py-2.5 px-3 w-20">Ledger #</th>
                   <th className="py-2.5 px-3">Member Details</th>
-                  <th className="py-2.5 px-3 text-right">Monthly Due</th>
-                  <th className="py-2.5 px-3 text-right">Opening Bal. (Manual)</th>
+                  <th className="py-2.5 px-3 text-right">Monthly Rate</th>
+                  <th className="py-2.5 px-3 text-right">Previous Due (Manual)</th>
                   <th className="py-2.5 px-3 text-right">Total Paid (Auto)</th>
                   <th className="py-2.5 px-3 text-center">Receipts</th>
                   <th className="py-2.5 px-3">Last Payment</th>
-                  <th className="py-2.5 px-3 text-right">Effective Balance</th>
+                  <th className="py-2.5 px-3 text-right">Balance / Status</th>
                   <th className="py-2.5 px-3 text-center">Status</th>
                   <th className="py-2.5 px-2 text-center w-16">Action</th>
                 </tr>
@@ -418,6 +427,7 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                   displayedBalances.map((item, idx) => {
                     const isPositive = item.effectiveBalance > 0;
                     const isNegative = item.effectiveBalance < 0;
+                    const isNil = item.isPaidUp && item.showNilBalanceWhenPaid && item.effectiveBalance <= 0;
 
                     return (
                       <tr key={item.ledgerNo} className="hover:bg-slate-50 transition-colors">
@@ -442,15 +452,25 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                             type="button"
                             onClick={() => onEditMemberBalance && onEditMemberBalance(item.member)}
                             className={`font-mono font-semibold hover:underline cursor-pointer ${
-                              item.openingBalance > 0
-                                ? 'text-emerald-700'
-                                : item.openingBalance < 0
+                              item.previousDue > 0
                                 ? 'text-rose-700'
+                                : item.openingBalance > 0
+                                ? 'text-emerald-700'
                                 : 'text-slate-400'
                             }`}
-                            title="Click to edit manual opening balance"
+                            title="Click to edit manual previous dues/opening balance"
                           >
-                            {item.openingBalance !== 0 ? formatMoney(item.openingBalance) : 'Rs. 0'}
+                            {item.previousDue > 0 ? (
+                              <span>
+                                {formatMoney(item.previousDue)} <span className="text-[9px] text-rose-600 font-bold">(Due)</span>
+                              </span>
+                            ) : item.openingBalance !== 0 ? (
+                              <span>
+                                {formatMoney(item.openingBalance)} <span className="text-[9px] text-emerald-600 font-bold">(Adv)</span>
+                              </span>
+                            ) : (
+                              'Rs. 0'
+                            )}
                           </button>
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-bold text-emerald-800">
@@ -469,17 +489,24 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                           {item.lastPaymentDate ? fmtDate(item.lastPaymentDate) : <span className="text-slate-400">None</span>}
                         </td>
                         <td className="py-2.5 px-3 text-right font-mono font-extrabold">
-                          <span
-                            className={`px-2 py-0.5 rounded text-xs ${
-                              isPositive
-                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                : isNegative
-                                ? 'bg-rose-50 text-rose-800 border border-rose-200'
-                                : 'text-slate-700'
-                            }`}
-                          >
-                            {formatMoney(item.effectiveBalance)}
-                          </span>
+                          {isNil ? (
+                            <span className="px-2 py-0.5 bg-emerald-50 text-emerald-800 border border-emerald-300 rounded font-sans text-xs font-bold">
+                              Nil (Paid Up)
+                            </span>
+                          ) : (
+                            <span
+                              className={`px-2 py-0.5 rounded text-xs ${
+                                isPositive
+                                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                  : isNegative
+                                  ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                                  : 'text-slate-700'
+                              }`}
+                            >
+                              {formatMoney(item.effectiveBalance)}
+                              {isPositive && <span className="text-[9px] ml-1 text-emerald-700 font-normal">Adv</span>}
+                            </span>
+                          )}
                         </td>
                         <td className="py-2.5 px-3 text-center">
                           {item.status === 'Advance' && (
@@ -487,17 +514,22 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                               Advance
                             </span>
                           )}
-                          {item.status === 'Arrears' && (
+                          {(item.status === 'Paid Up (Nil)' || isNil) && item.status !== 'Advance' && (
+                            <span className="px-2 py-0.5 bg-teal-100 text-teal-800 font-bold text-[10px] rounded-full">
+                              Paid Up (Nil)
+                            </span>
+                          )}
+                          {item.status === 'Arrears' && !isNil && (
                             <span className="px-2 py-0.5 bg-rose-100 text-rose-800 font-bold text-[10px] rounded-full">
                               Arrears
                             </span>
                           )}
-                          {item.status === 'Cleared' && (
+                          {item.status === 'Cleared' && !isNil && (
                             <span className="px-2 py-0.5 bg-slate-100 text-slate-700 font-bold text-[10px] rounded-full">
                               Cleared
                             </span>
                           )}
-                          {item.status === 'Active' && (
+                          {item.status === 'Active' && !isNil && (
                             <span className="px-2 py-0.5 bg-sky-100 text-sky-800 font-bold text-[10px] rounded-full">
                               Active
                             </span>
@@ -508,7 +540,7 @@ export const AllMembersBalancePdfModal: React.FC<AllMembersBalancePdfModalProps>
                             type="button"
                             onClick={() => onEditMemberBalance && onEditMemberBalance(item.member)}
                             className="p-1.5 text-slate-500 hover:text-amber-700 hover:bg-amber-50 rounded-lg transition-colors cursor-pointer"
-                            title="Edit Manual Opening Balance"
+                            title="Edit Manual Previous Dues & Nil Setting"
                           >
                             <Pencil className="w-3.5 h-3.5" />
                           </button>

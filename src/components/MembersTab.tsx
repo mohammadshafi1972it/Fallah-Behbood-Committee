@@ -56,7 +56,13 @@ interface MembersTabProps {
   settings?: AppSettings;
   onAddMember: (member: Member) => void;
   onUpdateMember?: (member: Member) => void;
-  onUpdateMemberBalance?: (ledgerNo: string, openingBalance: number, notes?: string) => void;
+  onUpdateMemberBalance?: (
+    ledgerNo: string,
+    openingBalance: number,
+    previousDue?: number,
+    showNilBalanceWhenPaid?: boolean,
+    notes?: string
+  ) => void;
   onRemoveMember: (ledgerNo: string) => void;
   onBulkImportMembers: (newMembers: Member[]) => void;
   onSaveTransaction?: (txn: Transaction) => void;
@@ -971,8 +977,10 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                 filteredMembers.map((m) => {
                   const totals = calculateMemberTotals(transactions, m.ledgerNo);
                   const balItem = memberBalanceMap.get(m.ledgerNo);
+                  const previousDue = balItem ? balItem.previousDue : (m.previousDue || 0);
                   const openingBal = balItem ? balItem.openingBalance : (m.openingBalance || 0);
                   const liveEffectiveBal = balItem ? balItem.effectiveBalance : (openingBal + totals.totalPaid);
+                  const isNil = balItem ? (balItem.isPaidUp && balItem.showNilBalanceWhenPaid && liveEffectiveBal <= 0) : false;
                   const overdueItem = overdueMembersList.find((o) => o.ledgerNo === m.ledgerNo);
                   const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
                   const st = contrib?.status || 'Due';
@@ -1027,7 +1035,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                           )}
                         </td>
 
-                        {/* Manual Opening Balance */}
+                        {/* Manual Previous Due / Opening Balance */}
                         <td className="py-3 px-3">
                           <button
                             onClick={() => {
@@ -1035,9 +1043,19 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                               setIsEditBalanceModalOpen(true);
                             }}
                             className="group inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 border border-slate-200 hover:border-amber-300 transition-colors cursor-pointer"
-                            title="Click to manually update starting balance"
+                            title="Click to manually update previous due or starting balance"
                           >
-                            <span>{formatMoney(openingBal)}</span>
+                            {previousDue > 0 ? (
+                              <span className="text-rose-700 font-bold">
+                                {formatMoney(previousDue)} <span className="text-[9px] font-normal">(Due)</span>
+                              </span>
+                            ) : openingBal > 0 ? (
+                              <span className="text-emerald-700 font-bold">
+                                {formatMoney(openingBal)} <span className="text-[9px] font-normal">(Adv)</span>
+                              </span>
+                            ) : (
+                              <span>{formatMoney(openingBal)}</span>
+                            )}
                             <Pencil className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 text-amber-700" />
                           </button>
                         </td>
@@ -1047,17 +1065,25 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                           {formatMoney(totals.totalPaid)}
                         </td>
 
-                        {/* Effective Live Balance */}
+                        {/* Effective Live Balance / Nil Status */}
                         <td className="py-3 px-3 font-bold font-sans">
-                          <span
-                            className={`inline-block px-2 py-0.5 rounded text-xs font-mono font-bold ${
-                              liveEffectiveBal >= 0
-                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-                                : 'bg-rose-50 text-rose-800 border border-rose-200'
-                            }`}
-                          >
-                            {formatMoney(liveEffectiveBal)}
-                          </span>
+                          {isNil ? (
+                            <span className="inline-block px-2 py-0.5 rounded text-xs font-mono font-bold bg-teal-50 text-teal-800 border border-teal-300">
+                              Nil (Paid Up)
+                            </span>
+                          ) : (
+                            <span
+                              className={`inline-block px-2 py-0.5 rounded text-xs font-mono font-bold ${
+                                liveEffectiveBal > 0
+                                  ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                  : liveEffectiveBal < 0
+                                  ? 'bg-rose-50 text-rose-800 border border-rose-200'
+                                  : 'bg-slate-100 text-slate-700'
+                              }`}
+                            >
+                              {formatMoney(liveEffectiveBal)}
+                            </span>
+                          )}
                         </td>
 
                         <td className="py-3 px-3 text-slate-600">{totals.count}</td>
@@ -1543,24 +1569,11 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         }}
         member={selectedBalanceMember}
         transactions={transactions}
-        currentOpeningBalance={
-          selectedBalanceMember
-            ? (settings?.memberBalanceOverrides?.[selectedBalanceMember.ledgerNo]?.openingBalance ??
-               selectedBalanceMember.openingBalance ??
-               0)
-            : 0
-        }
-        currentNotes={
-          selectedBalanceMember
-            ? (settings?.memberBalanceOverrides?.[selectedBalanceMember.ledgerNo]?.notes ??
-               selectedBalanceMember.balanceNotes)
-            : undefined
-        }
-        onSaveBalance={(ledgerNo, openingBal, notes) => {
+        onSaveMemberBalance={(ledgerNo, openingBal, prevDue, showNil, notes) => {
           if (onUpdateMemberBalance) {
-            onUpdateMemberBalance(ledgerNo, openingBal, notes);
+            onUpdateMemberBalance(ledgerNo, openingBal, prevDue, showNil, notes);
           }
-          showToast(`Balance updated for Ledger #${ledgerNo}`);
+          showToast(`Balance settings updated for Ledger #${ledgerNo}`);
         }}
       />
 

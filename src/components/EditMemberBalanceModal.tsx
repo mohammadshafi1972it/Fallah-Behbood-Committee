@@ -1,14 +1,31 @@
 import React, { useState, useEffect } from 'react';
 import { Member, Transaction } from '../types';
 import { formatMoney, num, calculateMemberTotals } from '../lib/ledgerUtils';
-import { X, Save, DollarSign, ArrowRight, ShieldCheck, HelpCircle, History } from 'lucide-react';
+import {
+  X,
+  Save,
+  DollarSign,
+  ArrowRight,
+  ShieldCheck,
+  History,
+  CheckCircle2,
+  AlertCircle,
+  Sparkles,
+  RotateCcw,
+} from 'lucide-react';
 
 interface EditMemberBalanceModalProps {
   isOpen: boolean;
   onClose: () => void;
   member: Member | null;
   transactions: Transaction[];
-  onSaveMemberBalance: (ledgerNo: string, openingBalance: number, notes?: string) => void;
+  onSaveMemberBalance: (
+    ledgerNo: string,
+    openingBalance: number,
+    previousDue?: number,
+    showNilBalanceWhenPaid?: boolean,
+    notes?: string
+  ) => void;
   showToast?: (msg: string) => void;
 }
 
@@ -20,34 +37,73 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
   onSaveMemberBalance,
   showToast,
 }) => {
-  const [openingBalance, setOpeningBalance] = useState<string>('0');
+  // Mode: 'previous_due' (manual arrears) or 'advance_credit' (advance)
+  const [balanceMode, setBalanceMode] = useState<'previous_due' | 'advance_credit'>('previous_due');
+  const [amountInput, setAmountInput] = useState<string>('0');
+  const [showNilWhenPaid, setShowNilWhenPaid] = useState<boolean>(true);
   const [notes, setNotes] = useState<string>('');
 
   useEffect(() => {
     if (member) {
-      setOpeningBalance(String(member.openingBalance ?? 0));
+      const prevDue = member.previousDue !== undefined ? member.previousDue : (member.openingBalance && member.openingBalance < 0 ? Math.abs(member.openingBalance) : 0);
+      const openBal = member.openingBalance !== undefined ? member.openingBalance : 0;
+
+      if (prevDue > 0) {
+        setBalanceMode('previous_due');
+        setAmountInput(String(prevDue));
+      } else if (openBal > 0) {
+        setBalanceMode('advance_credit');
+        setAmountInput(String(openBal));
+      } else {
+        setBalanceMode('previous_due');
+        setAmountInput('0');
+      }
+
+      setShowNilWhenPaid(
+        member.showNilBalanceWhenPaid !== undefined ? member.showNilBalanceWhenPaid : true
+      );
       setNotes(member.balanceNotes || '');
     }
   }, [member]);
 
   if (!isOpen || !member) return null;
 
-  // Auto-calculated totals from ledger
+  // Auto-calculated totals from ledger for this member
   const memberTotals = calculateMemberTotals(transactions, member.ledgerNo);
-  const parsedOpening = num(openingBalance);
-  const effectiveLiveBalance = parsedOpening + memberTotals.totalPaid;
+  const totalPaid = memberTotals.totalPaid;
+  const parsedAmt = Math.abs(num(amountInput));
+
+  // Determine opening balance and previous due based on mode
+  const previousDue = balanceMode === 'previous_due' ? parsedAmt : 0;
+  const openingBalance = balanceMode === 'advance_credit' ? parsedAmt : -previousDue;
+
+  // Mathematical live balance = opening balance + total paid
+  const mathematicalBalance = openingBalance + totalPaid;
+
+  // Effective due amount to compare against
+  const expectedDue = previousDue > 0 ? previousDue : num(member.monthlyDue) || 150;
+  const isPaidUp = totalPaid > 0 && (previousDue > 0 ? totalPaid >= previousDue : mathematicalBalance >= 0);
+
+  // Resulting displayed balance
+  const isNilDisplay = isPaidUp && showNilWhenPaid && mathematicalBalance <= 0;
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    onSaveMemberBalance(member.ledgerNo, parsedOpening, notes.trim());
+    onSaveMemberBalance(
+      member.ledgerNo,
+      openingBalance,
+      previousDue,
+      showNilWhenPaid,
+      notes.trim()
+    );
     if (showToast) {
-      showToast(`Updated balance for ${member.name} (#${member.ledgerNo}) to ${formatMoney(effectiveLiveBalance)}`);
+      showToast(
+        `Updated balance for ${member.name} (#${member.ledgerNo}): ${
+          isNilDisplay ? 'Nil (Paid Up)' : formatMoney(mathematicalBalance)
+        }`
+      );
     }
     onClose();
-  };
-
-  const handleSetQuickAmount = (amt: number) => {
-    setOpeningBalance(String(amt));
   };
 
   return (
@@ -71,114 +127,224 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
               Manual Member Balance Configuration
             </h3>
             <p className="text-xs text-slate-500">
-              Set initial baseline balance for <strong className="text-slate-800">{member.name}</strong> (Ledger #{member.ledgerNo})
+              Configure previous dues & automatic live balance for{' '}
+              <strong className="text-slate-800">{member.name}</strong> (Ledger #{member.ledgerNo})
             </p>
           </div>
         </div>
 
-        {/* Real-time Calculation Explanation Box */}
-        <div className="bg-blue-50 border border-blue-200 rounded-xl p-3.5 mb-5 text-xs text-blue-900 space-y-1.5">
-          <div className="font-bold flex items-center gap-1.5 text-blue-950">
-            <ShieldCheck className="w-4 h-4 text-blue-600" />
-            <span>Automatic Real-time Update Formula:</span>
+        {/* Rule Explanation Banner */}
+        <div className="bg-emerald-50/80 border border-emerald-200 rounded-xl p-3.5 mb-5 text-xs text-emerald-950 space-y-1.5 shadow-2xs">
+          <div className="font-bold flex items-center gap-1.5 text-emerald-900">
+            <ShieldCheck className="w-4 h-4 text-emerald-600 shrink-0" />
+            <span>Automatic Live Balance & Nil Paid-Up Logic:</span>
           </div>
-          <p className="text-[11px] text-blue-800 leading-relaxed">
-            <strong>Effective Live Balance</strong> = <em>(Manual Opening Balance)</em> + <em>(Total Paid in Ledger)</em>.
-            When new payment vouchers are entered for this member, their live balance will automatically increment!
+          <p className="text-[11px] text-emerald-800 leading-relaxed">
+            • <strong>Auto-Updating:</strong> Live balance automatically updates whenever a payment is received in the ledger.<br />
+            • <strong>Nil on Paid-Up:</strong> When payment received is greater than or equal to due payment, the balance is shown as <strong>Nil</strong>.
           </p>
         </div>
 
-        {/* Live Calculation Preview Card */}
-        <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 mb-5 space-y-3">
-          <div className="flex items-center justify-between text-xs border-b border-slate-200 pb-2">
-            <span className="text-slate-600">Manual Opening / Baseline Balance:</span>
-            <span className={`font-mono font-bold ${parsedOpening >= 0 ? 'text-emerald-700' : 'text-rose-700'}`}>
-              {formatMoney(parsedOpening)}
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between text-xs border-b border-slate-200 pb-2">
-            <span className="text-slate-600 flex items-center gap-1">
-              <History className="w-3.5 h-3.5 text-slate-400" />
-              <span>Total Recorded Payments (Auto):</span>
-            </span>
-            <span className="font-mono font-bold text-emerald-800">
-              + {formatMoney(memberTotals.totalPaid)} <span className="text-[10px] text-slate-500 font-normal">({memberTotals.count} receipts)</span>
-            </span>
-          </div>
-
-          <div className="flex items-center justify-between text-xs pt-1 bg-amber-100/60 p-2.5 rounded-lg border border-amber-200">
-            <span className="font-bold text-amber-950 flex items-center gap-1">
-              <ArrowRight className="w-3.5 h-3.5 text-amber-700" />
-              <span>Effective Live Balance:</span>
-            </span>
-            <span className={`font-mono font-extrabold text-sm ${effectiveLiveBalance >= 0 ? 'text-emerald-800' : 'text-rose-800'}`}>
-              {formatMoney(effectiveLiveBalance)}
-              {effectiveLiveBalance > 0 && <span className="text-[10px] ml-1 px-1.5 py-0.5 bg-emerald-200 text-emerald-900 rounded-full font-bold">Advance</span>}
-              {effectiveLiveBalance < 0 && <span className="text-[10px] ml-1 px-1.5 py-0.5 bg-rose-200 text-rose-900 rounded-full font-bold">Arrears</span>}
-            </span>
-          </div>
-        </div>
-
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Previous / Opening Balance Mode Selector */}
+          <div>
+            <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+              1. Manual Balance Setting Type
+            </label>
+            <div className="grid grid-cols-2 gap-2">
+              <button
+                type="button"
+                onClick={() => setBalanceMode('previous_due')}
+                className={`py-2 px-3 text-xs font-bold rounded-lg border text-left cursor-pointer transition-all flex items-center gap-2 ${
+                  balanceMode === 'previous_due'
+                    ? 'bg-rose-50 border-rose-300 text-rose-900 ring-2 ring-rose-200'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <div>
+                  <div>Previous Due (Arrears)</div>
+                  <div className="text-[10px] font-normal text-rose-700">Past unpaid dues</div>
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setBalanceMode('advance_credit')}
+                className={`py-2 px-3 text-xs font-bold rounded-lg border text-left cursor-pointer transition-all flex items-center gap-2 ${
+                  balanceMode === 'advance_credit'
+                    ? 'bg-emerald-50 border-emerald-300 text-emerald-900 ring-2 ring-emerald-200'
+                    : 'bg-slate-50 border-slate-200 text-slate-600 hover:bg-slate-100'
+                }`}
+              >
+                <Sparkles className="w-4 h-4 text-emerald-600 shrink-0" />
+                <div>
+                  <div>Advance / Credit</div>
+                  <div className="text-[10px] font-normal text-emerald-700">Prepaid balance</div>
+                </div>
+              </button>
+            </div>
+          </div>
+
+          {/* Amount input */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Manual Opening / Starting Balance (Rs.)
+              {balanceMode === 'previous_due'
+                ? 'Manual Previous Due Amount (Rs.)'
+                : 'Manual Advance / Credit Amount (Rs.)'}
             </label>
-            <input
-              type="number"
-              step="any"
-              value={openingBalance}
-              onChange={(e) => setOpeningBalance(e.target.value)}
-              placeholder="e.g. 0 or 1000 for advance, -500 for arrears"
-              className="w-full text-sm font-mono font-bold px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
-              required
-            />
-            <p className="text-[10px] text-slate-500 mt-1">
-              Use positive value for starting Advance / Credit (e.g. +1000) or negative for Opening Arrears / Dues (e.g. -500).
-            </p>
+            <div className="relative">
+              <span className="absolute left-3 top-2.5 text-xs font-mono font-bold text-slate-400">
+                Rs.
+              </span>
+              <input
+                type="number"
+                min="0"
+                step="any"
+                value={amountInput}
+                onChange={(e) => setAmountInput(e.target.value)}
+                placeholder="0"
+                className="w-full text-sm font-mono font-bold pl-10 pr-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
+                required
+              />
+            </div>
 
             {/* Quick preset buttons */}
             <div className="flex flex-wrap items-center gap-1.5 mt-2">
               <span className="text-[10px] text-slate-400 font-medium mr-1">Quick:</span>
               <button
                 type="button"
-                onClick={() => handleSetQuickAmount(0)}
+                onClick={() => setAmountInput('0')}
                 className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                0 (Zero)
+                0 (Nil/None)
               </button>
               <button
                 type="button"
-                onClick={() => handleSetQuickAmount(150)}
-                className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                onClick={() => setAmountInput('150')}
+                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                +150 (1 Mo Adv)
+                150 (1 Mo)
               </button>
               <button
                 type="button"
-                onClick={() => handleSetQuickAmount(450)}
-                className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                onClick={() => setAmountInput('300')}
+                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                +450 (3 Mo Adv)
+                300 (2 Mo)
               </button>
               <button
                 type="button"
-                onClick={() => handleSetQuickAmount(1000)}
-                className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                onClick={() => setAmountInput('450')}
+                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                +1000 Advance
+                450 (3 Mo)
               </button>
               <button
                 type="button"
-                onClick={() => handleSetQuickAmount(-300)}
-                className="px-2 py-0.5 bg-rose-50 hover:bg-rose-100 text-rose-800 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                onClick={() => setAmountInput('1000')}
+                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                -300 Due
+                1,000
+              </button>
+              <button
+                type="button"
+                onClick={() => setAmountInput('1500')}
+                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+              >
+                1,500
               </button>
             </div>
           </div>
 
+          {/* Nil Balance Rule Option (Checkbox) */}
+          <div className="bg-amber-50/70 border border-amber-200 rounded-xl p-3.5">
+            <label className="flex items-start gap-2.5 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={showNilWhenPaid}
+                onChange={(e) => setShowNilWhenPaid(e.target.checked)}
+                className="mt-0.5 rounded border-amber-300 text-amber-600 focus:ring-amber-500 cursor-pointer"
+              />
+              <div className="text-xs">
+                <span className="font-bold text-amber-950 block">
+                  Show Balance as &quot;Nil&quot; when Paid Up
+                </span>
+                <span className="text-[11px] text-amber-800 block mt-0.5 leading-snug">
+                  When total payments received ({formatMoney(totalPaid)}) are greater than or equal to due payment ({formatMoney(expectedDue)}), mark the outstanding balance as <strong>Nil</strong>.
+                </span>
+              </div>
+            </label>
+          </div>
+
+          {/* Live Dynamic Calculation Preview Card */}
+          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 space-y-2.5">
+            <div className="text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+              Live Balance & Paid-Up Verification
+            </div>
+
+            <div className="flex items-center justify-between text-xs border-b border-slate-200 pb-1.5">
+              <span className="text-slate-600">
+                {balanceMode === 'previous_due' ? 'Manual Previous Due:' : 'Manual Advance / Credit:'}
+              </span>
+              <span className={`font-mono font-bold ${balanceMode === 'previous_due' ? 'text-rose-700' : 'text-emerald-700'}`}>
+                {balanceMode === 'previous_due' ? `- ${formatMoney(previousDue)}` : `+ ${formatMoney(openingBalance)}`}
+              </span>
+            </div>
+
+            <div className="flex items-center justify-between text-xs border-b border-slate-200 pb-1.5">
+              <span className="text-slate-600 flex items-center gap-1">
+                <History className="w-3.5 h-3.5 text-slate-400" />
+                <span>Total Recorded Payments (Auto):</span>
+              </span>
+              <span className="font-mono font-bold text-emerald-800">
+                + {formatMoney(totalPaid)} <span className="text-[10px] text-slate-500 font-normal">({memberTotals.count} receipts)</span>
+              </span>
+            </div>
+
+            {/* Live Display Balance Banner */}
+            <div className={`p-3 rounded-lg border flex items-center justify-between ${
+              isPaidUp
+                ? 'bg-emerald-50 border-emerald-200 text-emerald-950'
+                : 'bg-rose-50 border-rose-200 text-rose-950'
+            }`}>
+              <div className="space-y-0.5">
+                <div className="text-xs font-bold flex items-center gap-1">
+                  {isPaidUp ? (
+                    <>
+                      <CheckCircle2 className="w-4 h-4 text-emerald-600" />
+                      <span>Status: Paid Up</span>
+                    </>
+                  ) : (
+                    <>
+                      <AlertCircle className="w-4 h-4 text-rose-600" />
+                      <span>Status: Due Pending</span>
+                    </>
+                  )}
+                </div>
+                <div className="text-[10px] text-slate-600">
+                  {isPaidUp
+                    ? `Payment received (${formatMoney(totalPaid)}) ≥ Due (${formatMoney(expectedDue)})`
+                    : `Remaining due: ${formatMoney(Math.abs(mathematicalBalance))}`}
+                </div>
+              </div>
+
+              <div className="text-right">
+                <div className="text-[10px] text-slate-500 font-semibold uppercase">Display Balance</div>
+                <div className="font-mono font-extrabold text-sm">
+                  {isNilDisplay ? (
+                    <span className="text-emerald-700 px-2 py-0.5 bg-emerald-100 rounded-md">Nil (Paid Up)</span>
+                  ) : mathematicalBalance > 0 ? (
+                    <span className="text-emerald-700">+{formatMoney(mathematicalBalance)} (Adv)</span>
+                  ) : (
+                    <span className="text-rose-700">{formatMoney(mathematicalBalance)}</span>
+                  )}
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Audit Notes */}
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Audit Notes / Baseline Reason (Optional)
@@ -187,11 +353,12 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
               type="text"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="e.g. Carried forward from previous register, 2025 advance..."
+              placeholder="e.g. Carried forward previous register, 2025 arrears cleared..."
               className="w-full text-xs px-3 py-2 border border-slate-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-amber-400 bg-white"
             />
           </div>
 
+          {/* Action Buttons */}
           <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100">
             <button
               type="button"

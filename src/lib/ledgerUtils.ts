@@ -110,18 +110,50 @@ export function calculateMemberTotals(transactions: Transaction[], ledgerNo: str
 export function computeMemberBalanceList(
   members: Member[],
   transactions: Transaction[],
-  memberBalanceOverrides?: Record<string, { openingBalance?: number; notes?: string }>
+  memberBalanceOverrides?: Record<
+    string,
+    {
+      openingBalance?: number;
+      previousDue?: number;
+      showNilBalanceWhenPaid?: boolean;
+      notes?: string;
+    }
+  >
 ): MemberBalanceItem[] {
   // Pre-filter Income transactions
-  const incomeTxns = transactions.filter(t => t.type === 'Income');
+  const incomeTxns = transactions.filter((t) => t.type === 'Income');
 
   return members.map((m) => {
     const lNo = String(m.ledgerNo || '').trim();
     const memberTxns = incomeTxns.filter((t) => String(t.ledgerNo || '').trim() === lNo);
 
-    // Manual opening balance (if set on member object or via overrides)
+    // Manual opening balance & previous due
     const override = memberBalanceOverrides ? memberBalanceOverrides[lNo] : undefined;
-    const openingBalance = num(m.openingBalance !== undefined ? m.openingBalance : override?.openingBalance || 0);
+
+    let previousDue = 0;
+    if (override?.previousDue !== undefined) {
+      previousDue = num(override.previousDue);
+    } else if (m.previousDue !== undefined) {
+      previousDue = num(m.previousDue);
+    } else if (m.openingBalance !== undefined && m.openingBalance < 0) {
+      previousDue = Math.abs(num(m.openingBalance));
+    }
+
+    let openingBalance = 0;
+    if (override?.openingBalance !== undefined) {
+      openingBalance = num(override.openingBalance);
+    } else if (m.openingBalance !== undefined) {
+      openingBalance = num(m.openingBalance);
+    } else if (previousDue > 0) {
+      openingBalance = -previousDue;
+    }
+
+    const showNilBalanceWhenPaid =
+      override?.showNilBalanceWhenPaid !== undefined
+        ? override.showNilBalanceWhenPaid
+        : m.showNilBalanceWhenPaid !== undefined
+        ? m.showNilBalanceWhenPaid
+        : true; // Enabled by default as per user request
 
     // Sum all income transactions credited to this member
     const totalPaid = memberTxns.reduce((sum, t) => sum + num(t.amount), 0);
@@ -139,13 +171,33 @@ export function computeMemberBalanceList(
       lastPaymentDate = sorted[0].date;
     }
 
-    // Effective live balance = (Manual Opening Balance) + (Total Paid to Date)
+    // Effective mathematical live balance = (Manual Opening Balance) + (Total Paid to Date)
     const effectiveBalance = openingBalance + totalPaid;
 
+    // Total due target (previous arrears + monthly rate baseline)
+    const totalDue = previousDue > 0 ? previousDue : num(m.monthlyDue) || 150;
+
+    // Paid up when total payment received is greater than or equal to due payment
+    const isPaidUp =
+      totalPaid > 0 &&
+      (previousDue > 0 ? totalPaid >= previousDue : effectiveBalance >= 0);
+
+    // When payment received is >= due payment and showNilBalanceWhenPaid is true, outstanding balance is Nil (0)
+    let balanceDue = 0;
+    if (isPaidUp && showNilBalanceWhenPaid) {
+      balanceDue = 0;
+    } else if (effectiveBalance < 0) {
+      balanceDue = Math.abs(effectiveBalance);
+    } else if (totalDue > totalPaid) {
+      balanceDue = totalDue - totalPaid;
+    }
+
     // Balance status classification
-    let status: 'Advance' | 'Cleared' | 'Arrears' | 'Active' = 'Active';
+    let status: 'Paid Up (Nil)' | 'Advance' | 'Cleared' | 'Arrears' | 'Active' = 'Active';
     if (effectiveBalance > 0) {
       status = 'Advance';
+    } else if (isPaidUp && showNilBalanceWhenPaid) {
+      status = 'Paid Up (Nil)';
     } else if (effectiveBalance === 0 && totalPaid > 0) {
       status = 'Cleared';
     } else if (effectiveBalance < 0) {
@@ -162,12 +214,17 @@ export function computeMemberBalanceList(
       phone: m.phone || '',
       address: m.address || '',
       openingBalance,
+      previousDue,
+      totalDue,
       totalPaid,
       subscriptionPaid,
       otherPaid,
       receiptsCount: memberTxns.length,
       lastPaymentDate,
       effectiveBalance,
+      balanceDue,
+      isPaidUp,
+      showNilBalanceWhenPaid,
       status,
       balanceNotes: m.balanceNotes || override?.notes || '',
     };
@@ -185,6 +242,7 @@ export function printAllMembersBalancePDF(
     sessionTag?: string;
     subTitle?: string;
     filterLabel?: string;
+    showNilWhenPaid?: boolean;
   }
 ): void {
   if (!memberBalances || memberBalances.length === 0) return;
@@ -199,35 +257,55 @@ export function printAllMembersBalancePDF(
 
   // Compute Grand Summary
   let grandOpening = 0;
+  let grandPreviousDue = 0;
   let grandPaid = 0;
   let grandSubscription = 0;
   let grandOther = 0;
   let grandEffective = 0;
   let grandReceipts = 0;
   let activePayers = 0;
+  let paidUpCount = 0;
 
   memberBalances.forEach((item) => {
     grandOpening += item.openingBalance;
+    grandPreviousDue += item.previousDue;
     grandPaid += item.totalPaid;
     grandSubscription += item.subscriptionPaid;
     grandOther += item.otherPaid;
     grandEffective += item.effectiveBalance;
     grandReceipts += item.receiptsCount;
     if (item.totalPaid > 0) activePayers++;
+    if (item.isPaidUp || item.status === 'Paid Up (Nil)') paidUpCount++;
   });
 
   const rowsHtml = memberBalances
     .map((item, idx) => {
       const isPositive = item.effectiveBalance > 0;
       const isNegative = item.effectiveBalance < 0;
+      const isNil = item.isPaidUp && item.showNilBalanceWhenPaid && item.effectiveBalance <= 0;
+
       const statusBadge =
         item.status === 'Advance'
           ? '<span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Advance</span>'
+          : item.status === 'Paid Up (Nil)' || isNil
+          ? '<span style="background:#dcfce7; color:#0f766e; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Paid Up (Nil)</span>'
           : item.status === 'Arrears'
           ? '<span style="background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Arrears Due</span>'
           : item.status === 'Cleared'
           ? '<span style="background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Cleared</span>'
           : '<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Active</span>';
+
+      // Format balance display with optional Nil when paid >= due
+      let balanceDisplay = '';
+      if (isNil) {
+        balanceDisplay = '<span style="color:#0f766e; font-weight:bold; font-family:sans-serif;">Nil (Paid Up)</span>';
+      } else if (isPositive) {
+        balanceDisplay = `<span style="color:#065f46; font-weight:bold;">${formatMoney(item.effectiveBalance)}</span> <span style="font-size:7pt; color:#166534;">(Adv)</span>`;
+      } else if (isNegative) {
+        balanceDisplay = `<span style="color:#b91c1c; font-weight:bold;">${formatMoney(item.effectiveBalance)}</span>`;
+      } else {
+        balanceDisplay = `<span style="color:#334155; font-weight:bold;">${formatMoney(0)}</span>`;
+      }
 
       return `
         <tr>
@@ -238,8 +316,8 @@ export function printAllMembersBalancePDF(
             ${item.phone ? `<div style="font-size:7.5pt; color:#64748b; font-weight:normal;">📱 ${item.phone}</div>` : ''}
           </td>
           <td style="text-align:right; font-family:monospace; color:#475569;">${formatMoney(item.monthlyDue)}</td>
-          <td style="text-align:right; font-family:monospace; color:${item.openingBalance >= 0 ? '#047857' : '#b91c1c'}; font-weight:500;">
-            ${item.openingBalance !== 0 ? formatMoney(item.openingBalance) : '—'}
+          <td style="text-align:right; font-family:monospace; color:${item.previousDue > 0 ? '#b91c1c' : item.openingBalance > 0 ? '#047857' : '#64748b'}; font-weight:500;">
+            ${item.previousDue > 0 ? `${formatMoney(item.previousDue)} <span style="font-size:7pt; color:#991b1b;">(Due)</span>` : item.openingBalance !== 0 ? formatMoney(item.openingBalance) : '—'}
           </td>
           <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
             ${formatMoney(item.totalPaid)}
@@ -250,10 +328,10 @@ export function printAllMembersBalancePDF(
           <td style="font-size:8pt; color:#64748b; white-space:nowrap;">
             ${item.lastPaymentDate ? fmtDate(item.lastPaymentDate) : 'No payment'}
           </td>
-          <td style="text-align:right; font-family:monospace; font-weight:bold; font-size:9.5pt; color:${
-            isPositive ? '#065f46' : isNegative ? '#b91c1c' : '#334155'
-          }; background:${isPositive ? '#f0fdf4' : isNegative ? '#fef2f2' : 'transparent'};">
-            ${formatMoney(item.effectiveBalance)}
+          <td style="text-align:right; font-family:monospace; font-size:9.5pt; background:${
+            isPositive ? '#f0fdf4' : isNil ? '#f0fdfa' : isNegative ? '#fef2f2' : 'transparent'
+          };">
+            ${balanceDisplay}
           </td>
           <td style="text-align:center;">${statusBadge}</td>
         </tr>
@@ -307,12 +385,12 @@ export function printAllMembersBalancePDF(
           <div class="val">${memberBalances.length}</div>
         </div>
         <div class="kpi-box">
-          <div class="lbl">Active Payers</div>
-          <div class="val" style="color:#0284c7;">${activePayers} / ${memberBalances.length}</div>
+          <div class="lbl">Paid Up / Active</div>
+          <div class="val" style="color:#0f766e;">${paidUpCount} / ${memberBalances.length}</div>
         </div>
         <div class="kpi-box">
-          <div class="lbl">Manual Opening Balances</div>
-          <div class="val" style="color:${grandOpening >= 0 ? '#047857' : '#b91c1c'};">${formatMoney(grandOpening)}</div>
+          <div class="lbl">Manual Previous Dues</div>
+          <div class="val" style="color:#b91c1c;">${formatMoney(grandPreviousDue)}</div>
         </div>
         <div class="kpi-box">
           <div class="lbl">Total Collections Paid</div>
@@ -331,11 +409,11 @@ export function printAllMembersBalancePDF(
             <th style="width:65px;">Ledger #</th>
             <th>Member Name</th>
             <th style="text-align:right; width:70px;">Monthly Rate</th>
-            <th style="text-align:right; width:85px;">Opening Bal. (Manual)</th>
+            <th style="text-align:right; width:85px;">Previous Due (Manual)</th>
             <th style="text-align:right; width:85px;">Total Paid (Auto)</th>
             <th style="text-align:center; width:60px;">Receipts</th>
             <th style="width:75px;">Last Paid</th>
-            <th style="text-align:right; width:95px;">Effective Balance</th>
+            <th style="text-align:right; width:95px;">Balance / Status</th>
             <th style="text-align:center; width:65px;">Status</th>
           </tr>
         </thead>
@@ -416,14 +494,16 @@ export function exportAllMembersBalanceExcel(
       'Phone Number',
       'Address',
       'Monthly Subscription (Rs.)',
-      'Manual Opening Balance (Rs.)',
+      'Manual Previous Due / Opening (Rs.)',
       'Total Paid to Date (Rs.)',
       'Subscription Paid (Rs.)',
       'Other Funds / Donations (Rs.)',
       'Receipts Count',
       'Last Payment Date',
       'Effective Live Balance (Rs.)',
+      'Display Balance',
       'Balance Status',
+      'Paid Up Status',
       'Balance Notes / Remarks',
     ],
     ...memberBalances.map((m, idx) => [
@@ -433,14 +513,16 @@ export function exportAllMembersBalanceExcel(
       m.phone || '',
       m.address || '',
       m.monthlyDue,
-      m.openingBalance,
+      m.previousDue > 0 ? -m.previousDue : m.openingBalance,
       m.totalPaid,
       m.subscriptionPaid,
       m.otherPaid,
       m.receiptsCount,
       m.lastPaymentDate ? fmtDate(m.lastPaymentDate) : '—',
       m.effectiveBalance,
+      m.isPaidUp && m.showNilBalanceWhenPaid && m.effectiveBalance <= 0 ? 'Nil' : m.effectiveBalance,
       m.status,
+      m.isPaidUp ? 'Paid Up' : 'Pending',
       m.balanceNotes || '',
     ]),
   ];
@@ -476,8 +558,10 @@ export function exportAllMembersBalanceExcel(
     grandCount,
     '—',
     grandEffective,
+    '—',
     'Audited',
     'Consolidated Member Statement',
+    '',
   ]);
 
   const ws = XLSX.utils.aoa_to_sheet(data);

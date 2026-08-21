@@ -25,6 +25,8 @@ export interface Member {
   phone?: string;
   address?: string;
   openingBalance?: number; // Manual initial balance: positive = Advance/Credit, negative = Starting Arrears/Due
+  previousDue?: number; // Optional manual previous due / arrears from earlier periods
+  showNilBalanceWhenPaid?: boolean; // Optional: show balance as Nil when payment received >= due payment
   balanceNotes?: string;
   updatedAt?: string;
 }
@@ -36,14 +38,19 @@ export interface MemberBalanceItem {
   monthlyDue: number;
   phone?: string;
   address?: string;
-  openingBalance: number; // Manual starting balance
+  openingBalance: number; // Manual starting balance (+ for advance, - for arrears)
+  previousDue: number; // Manual previous due / arrears amount
+  totalDue: number; // Total expected due (previousDue + subscription dues)
   totalPaid: number; // Sum of all income payments recorded (automatically updated in real-time)
   subscriptionPaid: number; // Specific to subscription
   otherPaid: number; // Other funds/donations
   receiptsCount: number; // Number of payments made
   lastPaymentDate: string | null;
-  effectiveBalance: number; // openingBalance + totalPaid
-  status: 'Advance' | 'Cleared' | 'Arrears' | 'Active';
+  effectiveBalance: number; // True mathematical balance: openingBalance + totalPaid
+  balanceDue: number; // Outstanding due balance (0 / Nil when paid up and Nil option is active)
+  isPaidUp: boolean; // True when payment received is greater than or equal to due payment
+  showNilBalanceWhenPaid: boolean; // Whether the balance displays as Nil when paid up
+  status: 'Paid Up (Nil)' | 'Advance' | 'Cleared' | 'Arrears' | 'Active';
   balanceNotes?: string;
 }
 
@@ -91,7 +98,16 @@ export interface AppSettings {
   linkedGoogleSheetName?: string;
   lastSyncedAt?: string;
   monthBalances?: MonthBalanceOverrides;
-  memberBalanceOverrides?: Record<string, { openingBalance?: number; notes?: string }>;
+  defaultShowNilBalanceWhenPaid?: boolean;
+  memberBalanceOverrides?: Record<
+    string,
+    {
+      openingBalance?: number;
+      previousDue?: number;
+      showNilBalanceWhenPaid?: boolean;
+      notes?: string;
+    }
+  >;
 }
 
 export interface StorageStatus {

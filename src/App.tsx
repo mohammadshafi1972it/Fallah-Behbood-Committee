@@ -214,7 +214,13 @@ export default function App() {
     });
   };
 
-  const handleUpdateMemberBalance = (ledgerNo: string, openingBalance: number, notes?: string) => {
+  const handleUpdateMemberBalance = (
+    ledgerNo: string,
+    openingBalance: number,
+    previousDue?: number,
+    showNilBalanceWhenPaid?: boolean,
+    notes?: string
+  ) => {
     setMembers((prev) => {
       const idx = prev.findIndex((m) => m.ledgerNo === ledgerNo);
       if (idx > -1) {
@@ -222,6 +228,8 @@ export default function App() {
         copy[idx] = {
           ...copy[idx],
           openingBalance,
+          previousDue,
+          showNilBalanceWhenPaid,
           balanceNotes: notes,
           updatedAt: new Date().toISOString(),
         };
@@ -235,7 +243,12 @@ export default function App() {
       ...prev,
       memberBalanceOverrides: {
         ...(prev.memberBalanceOverrides || {}),
-        [ledgerNo]: { openingBalance, notes },
+        [ledgerNo]: {
+          openingBalance,
+          previousDue,
+          showNilBalanceWhenPaid,
+          notes,
+        },
       },
     }));
   };
