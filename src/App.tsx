@@ -146,7 +146,12 @@ export default function App() {
       showToast('Successfully synced ledger & members to Google Sheets!');
     } catch (err: any) {
       console.error('Sync error:', err);
-      showToast('Failed to sync to Google Sheets: ' + (err.message || 'Error'));
+      const msg = err.message || 'Error';
+      showToast('Google Sheets Sync: ' + msg);
+      if (msg.includes('expired') || msg.includes('sign-in') || msg.includes('401') || msg.includes('credentials')) {
+        checkGoogleAuthStatus();
+        setIsDriveModalOpen(true);
+      }
     } finally {
       setStorageStatus((prev) => ({ ...prev, syncing: false }));
     }

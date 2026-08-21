@@ -1,5 +1,18 @@
+import { initializeApp, getApps, getApp } from 'firebase/app';
+import { 
+  getAuth, 
+  signInWithPopup, 
+  GoogleAuthProvider, 
+  onAuthStateChanged, 
+  signOut,
+  User 
+} from 'firebase/auth';
 import firebaseConfig from '../../firebase-applet-config.json';
 import { Transaction, Member, AppSettings, DriveFileItem } from '../types';
+
+// Initialize Firebase
+const app = getApps().length > 0 ? getApp() : initializeApp(firebaseConfig);
+const auth = getAuth(app);
 
 // Global declaration for Google Identity Services
 declare global {
@@ -53,6 +66,30 @@ try {
 } catch (e) {
   // ignore
 }
+
+// Keep Firebase auth state listener
+onAuthStateChanged(auth, async (user: User | null) => {
+  if (!user) {
+    if (!cachedAccessToken) {
+      setCachedAuth(null, null);
+    }
+  } else if (!cachedUserProfile && user) {
+    const profile: GoogleUserProfile = {
+      id: user.uid,
+      email: user.email || undefined,
+      name: user.displayName || undefined,
+      picture: user.photoURL || undefined,
+    };
+    cachedUserProfile = profile;
+    authListeners.forEach((fn) => {
+      try {
+        fn(profile, cachedAccessToken);
+      } catch (err) {
+        console.error(err);
+      }
+    });
+  }
+});
 
 export function getCustomClientId(): string {
   try {
@@ -144,6 +181,25 @@ export function subscribeAuth(callback: (user: GoogleUserProfile | null, token: 
   };
 }
 
+// Helper to check for expired token / auth error and clear cached state immediately
+function checkAndHandleAuthError(status: number, message?: string) {
+  const isAuthError = 
+    status === 401 ||
+    status === 403 ||
+    (typeof message === 'string' && (
+      message.toLowerCase().includes('invalid authentication credentials') ||
+      message.toLowerCase().includes('unauthenticated') ||
+      message.toLowerCase().includes('access token') ||
+      message.toLowerCase().includes('oauth 2 access token') ||
+      message.toLowerCase().includes('invalid credentials')
+    ));
+
+  if (isAuthError) {
+    setCachedAuth(null, null);
+    throw new Error('Your Google session has expired or requires sign-in. Please click "Sign in with Google" to connect.');
+  }
+}
+
 // Helper to ensure GSI script is loaded
 async function ensureGoogleScriptLoaded(): Promise<void> {
   if (window.google?.accounts?.oauth2) return;
@@ -168,18 +224,70 @@ async function ensureGoogleScriptLoaded(): Promise<void> {
 }
 
 /**
- * Initiates Google OAuth Sign In using Google Identity Services (GIS)
+ * Initiates Google OAuth Sign In using Firebase Auth with Google Identity Services fallback
  */
 export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessToken: string }> {
+  // If custom client ID is explicitly provided, use GIS directly
+  const customId = getCustomClientId();
+  if (customId) {
+    return googleSignInWithGIS(customId);
+  }
+
+  try {
+    const provider = new GoogleAuthProvider();
+    provider.addScope('https://www.googleapis.com/auth/drive.file');
+    provider.addScope('https://www.googleapis.com/auth/spreadsheets');
+    provider.addScope('https://www.googleapis.com/auth/userinfo.email');
+    provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
+    provider.setCustomParameters({ prompt: 'select_account consent' });
+
+    const result = await signInWithPopup(auth, provider);
+    const credential = GoogleAuthProvider.credentialFromResult(result);
+    const accessToken = credential?.accessToken;
+
+    if (!accessToken) {
+      const effectiveId = getEffectiveClientId();
+      if (effectiveId) {
+        return await googleSignInWithGIS(effectiveId);
+      }
+      throw new Error('Google sign-in completed, but no OAuth access token was returned.');
+    }
+
+    const userProfile: GoogleUserProfile = {
+      id: result.user.uid,
+      email: result.user.email || undefined,
+      name: result.user.displayName || undefined,
+      picture: result.user.photoURL || undefined,
+    };
+
+    setCachedAuth(accessToken, userProfile);
+    return { user: userProfile, accessToken };
+  } catch (err: any) {
+    console.warn('Firebase Auth popup failed, attempting GIS fallback:', err);
+    if (err?.code === 'auth/popup-closed-by-user') {
+      throw new Error('Sign-in cancelled. Please complete the Google sign-in window.');
+    }
+
+    const effectiveId = getEffectiveClientId();
+    if (effectiveId) {
+      try {
+        return await googleSignInWithGIS(effectiveId);
+      } catch (gisErr: any) {
+        throw new Error(gisErr?.message || err?.message || 'Google sign-in authorization failed.');
+      }
+    }
+    throw new Error(err?.message || 'Google sign-in authorization failed.');
+  }
+}
+
+/**
+ * Google Identity Services sign-in fallback
+ */
+async function googleSignInWithGIS(clientId: string): Promise<{ user: GoogleUserProfile; accessToken: string }> {
   await ensureGoogleScriptLoaded();
 
   if (!window.google?.accounts?.oauth2) {
     throw new Error('Google Identity Services not ready. Please refresh the page and try again.');
-  }
-
-  const clientId = getEffectiveClientId();
-  if (!clientId) {
-    throw new Error('OAuth Client ID is missing. Please configure a Client ID in the settings below.');
   }
 
   return new Promise((resolve, reject) => {
@@ -237,6 +345,12 @@ export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessT
 }
 
 export async function googleLogout() {
+  try {
+    await signOut(auth);
+  } catch (e) {
+    // ignore
+  }
+
   const token = getCachedToken();
   if (token && window.google?.accounts?.oauth2?.revoke) {
     try {
@@ -253,22 +367,33 @@ export async function googleLogout() {
 // ==========================================
 
 export async function fetchDriveFilesList(token: string): Promise<DriveFileItem[]> {
+  if (!token) {
+    throw new Error('Please sign in to Google first.');
+  }
+
   const query = encodeURIComponent("trashed = false and (mimeType = 'application/vnd.google-apps.spreadsheet' or mimeType = 'application/json')");
   const url = `https://www.googleapis.com/drive/v3/files?q=${query}&fields=files(id,name,mimeType,modifiedTime,webViewLink)&pageSize=30&orderBy=modifiedTime%20desc`;
 
-  const res = await fetch(url, {
-    headers: {
-      Authorization: `Bearer ${token}`,
-    },
-  });
+  try {
+    const res = await fetch(url, {
+      headers: {
+        Authorization: `Bearer ${token}`,
+      },
+    });
 
-  if (!res.ok) {
-    const errData = await res.json().catch(() => ({}));
-    throw new Error(errData.error?.message || `Failed to fetch Drive files (${res.status})`);
+    if (!res.ok) {
+      const errData = await res.json().catch(() => ({}));
+      const errMsg = errData.error?.message || `Failed to fetch Drive files (${res.status})`;
+      checkAndHandleAuthError(res.status, errMsg);
+      throw new Error(errMsg);
+    }
+
+    const data = await res.json();
+    return data.files || [];
+  } catch (err: any) {
+    checkAndHandleAuthError(0, err?.message);
+    throw err;
   }
-
-  const data = await res.json();
-  return data.files || [];
 }
 
 export async function syncLedgerToGoogleSheet(
@@ -280,13 +405,39 @@ export async function syncLedgerToGoogleSheet(
     existingSpreadsheetId?: string;
   }
 ): Promise<{ spreadsheetId: string; name: string; webViewLink: string; syncedAt: string }> {
+  if (!token) {
+    throw new Error('Please sign in to Google first.');
+  }
+
   const { transactions, members, settings, existingSpreadsheetId } = payload;
   const orgName = settings.organizationName || 'Fallah Behbood Committee';
   const sheetTitle = `${orgName} Ledger (Pampore)`;
 
   let spreadsheetId = existingSpreadsheetId;
 
-  // 1. If no spreadsheet ID exists, create a new Google Sheet
+  // 1. If spreadsheet ID exists, verify access
+  if (spreadsheetId) {
+    try {
+      const checkRes = await fetch(`https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}?fields=spreadsheetId`, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (!checkRes.ok) {
+        if (checkRes.status === 401) {
+          const err = await checkRes.json().catch(() => ({}));
+          checkAndHandleAuthError(401, err?.error?.message);
+        }
+        // If 404 / 403, create a new sheet
+        spreadsheetId = undefined;
+      }
+    } catch (e: any) {
+      if (e?.message?.includes('expired') || e?.message?.includes('sign-in')) {
+        throw e;
+      }
+      spreadsheetId = undefined;
+    }
+  }
+
+  // 2. If no spreadsheet ID exists, create a new Google Sheet
   if (!spreadsheetId) {
     const createRes = await fetch('https://sheets.googleapis.com/v4/spreadsheets', {
       method: 'POST',
@@ -306,14 +457,16 @@ export async function syncLedgerToGoogleSheet(
 
     if (!createRes.ok) {
       const err = await createRes.json().catch(() => ({}));
-      throw new Error(err.error?.message || 'Failed to create Google Spreadsheet');
+      const errMsg = err.error?.message || 'Failed to create Google Spreadsheet';
+      checkAndHandleAuthError(createRes.status, errMsg);
+      throw new Error(errMsg);
     }
 
     const createdData = await createRes.json();
     spreadsheetId = createdData.spreadsheetId;
   }
 
-  // 2. Prepare Tab Data
+  // 3. Prepare Tab Data
   const ledgerHeader = [
     'Date',
     'Type',
@@ -365,7 +518,7 @@ export async function syncLedgerToGoogleSheet(
     ['Last Synced Timestamp', new Date().toLocaleString()],
   ];
 
-  // 3. Batch Update Spreadsheet Values
+  // 4. Batch Update Spreadsheet Values
   const updateRes = await fetch(
     `https://sheets.googleapis.com/v4/spreadsheets/${spreadsheetId}/values:batchUpdate`,
     {
@@ -396,25 +549,36 @@ export async function syncLedgerToGoogleSheet(
 
   if (!updateRes.ok) {
     const err = await updateRes.json().catch(() => ({}));
-    throw new Error(err.error?.message || 'Failed to update Google Sheet values');
+    const errMsg = err.error?.message || 'Failed to update Google Sheet values';
+    checkAndHandleAuthError(updateRes.status, errMsg);
+    throw new Error(errMsg);
   }
 
-  // 4. Retrieve web link from Drive API
-  const fileRes = await fetch(
-    `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?fields=id,name,webViewLink`,
-    {
-      headers: {
-        Authorization: `Bearer ${token}`,
-      },
+  // 5. Retrieve web link from Drive API
+  let webViewLink = `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`;
+  let fileName = sheetTitle;
+  try {
+    const fileRes = await fetch(
+      `https://www.googleapis.com/drive/v3/files/${spreadsheetId}?fields=id,name,webViewLink`,
+      {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      }
+    );
+    if (fileRes.ok) {
+      const fileData = await fileRes.json();
+      if (fileData.webViewLink) webViewLink = fileData.webViewLink;
+      if (fileData.name) fileName = fileData.name;
     }
-  );
-
-  const fileData = await fileRes.json().catch(() => ({}));
+  } catch (fErr) {
+    // webViewLink is already set
+  }
 
   return {
     spreadsheetId: spreadsheetId!,
-    name: fileData.name || sheetTitle,
-    webViewLink: fileData.webViewLink || `https://docs.google.com/spreadsheets/d/${spreadsheetId}/edit`,
+    name: fileName,
+    webViewLink,
     syncedAt: new Date().toISOString(),
   };
 }
@@ -428,6 +592,10 @@ export async function saveJsonBackupToDrive(
     existingFileId?: string;
   }
 ): Promise<{ fileId: string; name: string; webViewLink?: string }> {
+  if (!token) {
+    throw new Error('Please sign in to Google first.');
+  }
+
   const fileName = 'Fallah_Behbood_Committee_Ledger_Backup.json';
   const jsonContent = JSON.stringify(
     {
@@ -478,7 +646,9 @@ export async function saveJsonBackupToDrive(
 
   if (!res.ok) {
     const err = await res.json().catch(() => ({}));
-    throw new Error(err.error?.message || 'Failed to save JSON backup to Google Drive');
+    const errMsg = err.error?.message || 'Failed to save JSON backup to Google Drive';
+    checkAndHandleAuthError(res.status, errMsg);
+    throw new Error(errMsg);
   }
 
   const data = await res.json();
@@ -497,6 +667,10 @@ export async function loadFileFromGoogleDrive(
   members: Member[];
   settings?: AppSettings;
 }> {
+  if (!token) {
+    throw new Error('Please sign in to Google first.');
+  }
+
   const metaRes = await fetch(
     `https://www.googleapis.com/drive/v3/files/${fileId}?fields=id,name,mimeType`,
     {
@@ -505,7 +679,10 @@ export async function loadFileFromGoogleDrive(
   );
 
   if (!metaRes.ok) {
-    throw new Error('Failed to retrieve file details from Google Drive');
+    const err = await metaRes.json().catch(() => ({}));
+    const errMsg = err.error?.message || 'Failed to retrieve file details from Google Drive';
+    checkAndHandleAuthError(metaRes.status, errMsg);
+    throw new Error(errMsg);
   }
 
   const meta = await metaRes.json();
@@ -519,7 +696,10 @@ export async function loadFileFromGoogleDrive(
     );
 
     if (!downloadRes.ok) {
-      throw new Error('Failed to download JSON backup file from Google Drive');
+      const err = await downloadRes.json().catch(() => ({}));
+      const errMsg = err.error?.message || 'Failed to download JSON backup file from Google Drive';
+      checkAndHandleAuthError(downloadRes.status, errMsg);
+      throw new Error(errMsg);
     }
 
     const json = await downloadRes.json();
@@ -536,12 +716,22 @@ export async function loadFileFromGoogleDrive(
       }
     );
 
+    if (!ledgerRes.ok && ledgerRes.status === 401) {
+      const err = await ledgerRes.json().catch(() => ({}));
+      checkAndHandleAuthError(401, err?.error?.message);
+    }
+
     const membersRes = await fetch(
       `https://sheets.googleapis.com/v4/spreadsheets/${fileId}/values/'Members Directory'!A2:D1000`,
       {
         headers: { Authorization: `Bearer ${token}` },
       }
     );
+
+    if (!membersRes.ok && membersRes.status === 401) {
+      const err = await membersRes.json().catch(() => ({}));
+      checkAndHandleAuthError(401, err?.error?.message);
+    }
 
     const ledgerData = await ledgerRes.json().catch(() => ({ values: [] }));
     const membersData = await membersRes.json().catch(() => ({ values: [] }));
@@ -579,3 +769,4 @@ export async function loadFileFromGoogleDrive(
     throw new Error('Unsupported file type. Please select a JSON backup or a Google Spreadsheet.');
   }
 }
+

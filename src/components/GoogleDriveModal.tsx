@@ -91,9 +91,9 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       setDriveFiles(files);
     } catch (err: any) {
       console.error('Failed to list drive files', err);
-      if (err.message?.includes('401') || err.message?.includes('UNAUTHENTICATED')) {
+      const msg = err.message || '';
+      if (msg.includes('expired') || msg.includes('sign-in') || msg.includes('401') || msg.includes('UNAUTHENTICATED') || msg.includes('credentials')) {
         showToast('Google session expired. Please sign in again.');
-        await googleLogout();
         onStatusUpdate();
       }
     } finally {
@@ -177,7 +177,11 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       loadDriveFiles();
     } catch (err: any) {
       console.error('Sheets sync error:', err);
-      showToast('Failed to sync to Google Sheets: ' + (err.message || 'Unknown error'));
+      const msg = err.message || 'Unknown error';
+      showToast('Google Sheets Sync: ' + msg);
+      if (msg.includes('expired') || msg.includes('sign-in') || msg.includes('401') || msg.includes('credentials')) {
+        onStatusUpdate();
+      }
     } finally {
       setSyncingSheet(false);
     }
@@ -202,7 +206,11 @@ export const GoogleDriveModal: React.FC<GoogleDriveModalProps> = ({
       loadDriveFiles();
     } catch (err: any) {
       console.error('Backup error:', err);
-      showToast('Failed to save JSON backup: ' + (err.message || 'Unknown error'));
+      const msg = err.message || 'Unknown error';
+      showToast('Google Drive Backup: ' + msg);
+      if (msg.includes('expired') || msg.includes('sign-in') || msg.includes('401') || msg.includes('credentials')) {
+        onStatusUpdate();
+      }
     } finally {
       setSavingBackup(false);
     }
