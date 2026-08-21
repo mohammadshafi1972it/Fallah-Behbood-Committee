@@ -144,6 +144,30 @@ export interface StorageStatus {
   syncing?: boolean;
 }
 
+export interface YearSummaryItem {
+  year: string; // e.g. "2019", "2020", "2026", or "2026-27"
+  yearLabel: string;
+  startDate: string;
+  endDate: string;
+  openingBalance: number;
+  income: number;
+  incomeCount: number;
+  expenditure: number;
+  expenditureCount: number;
+  net: number;
+  closingBalance: number;
+}
+
+export interface MemberYearlySummary {
+  year: string;
+  yearLabel: string;
+  expectedDue: number;
+  paid: number;
+  outstanding: number;
+  receiptsCount: number;
+  status: 'Paid' | 'Partial' | 'Due';
+}
+
 export interface MonthlySummaryItem {
   month: string; // YYYY-MM
   income: number;

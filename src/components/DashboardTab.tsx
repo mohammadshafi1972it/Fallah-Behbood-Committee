@@ -1,6 +1,18 @@
 import React, { useState, useMemo } from 'react';
 import { Transaction, Member, AppSettings } from '../types';
-import { computeMonthlySummary, computeDailySummary, formatMoney, num, exportCsv, fmtDate, calculateMemberTotals, calculateContributionsForMonth } from '../lib/ledgerUtils';
+import { 
+  computeMonthlySummary, 
+  computeDailySummary, 
+  formatMoney, 
+  num, 
+  exportCsv, 
+  fmtDate, 
+  calculateMemberTotals, 
+  calculateContributionsForMonth,
+  getAvailableYears,
+  computeMultiYearSummary,
+  BASE_START_YEAR
+} from '../lib/ledgerUtils';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts';
 import { 
   TrendingUp, 
@@ -22,7 +34,9 @@ import {
   AlertTriangle, 
   Clock, 
   Share2, 
-  Phone 
+  Phone,
+  BarChart3,
+  Layers
 } from 'lucide-react';
 import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 
@@ -44,8 +58,24 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   showToast,
 }) => {
   const [openingBal, setOpeningBal] = useState<string>(String(settings.openingBalance || 0));
+  const [selectedDashboardYear, setSelectedDashboardYear] = useState<string>('All');
   const [dailyFrom, setDailyFrom] = useState<string>('');
   const [dailyTo, setDailyTo] = useState<string>('');
+
+  // Available Years starting from 2019
+  const availableYears = useMemo(() => getAvailableYears(transactions, BASE_START_YEAR), [transactions]);
+
+  // Filtered transactions by selected dashboard year
+  const filteredTransactions = useMemo(() => {
+    if (selectedDashboardYear === 'All') return transactions;
+    return transactions.filter((t) => t.date && t.date.startsWith(selectedDashboardYear));
+  }, [transactions, selectedDashboardYear]);
+
+  // Multi-Year Summary from 2019 to Present
+  const multiYearSummaries = useMemo(
+    () => computeMultiYearSummary(transactions, settings.openingBalance, BASE_START_YEAR),
+    [transactions, settings.openingBalance]
+  );
 
   // Monthly Dues Report States
   const currentMonthStr = useMemo(() => new Date().toISOString().slice(0, 7), []);
@@ -59,13 +89,13 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   const [singleReminderTarget, setSingleReminderTarget] = useState<OverdueMemberItem | null>(null);
 
   const totalIncome = useMemo(
-    () => transactions.filter((t) => t.type === 'Income').reduce((s, t) => s + num(t.amount), 0),
-    [transactions]
+    () => filteredTransactions.filter((t) => t.type === 'Income').reduce((s, t) => s + num(t.amount), 0),
+    [filteredTransactions]
   );
 
   const totalExpenditure = useMemo(
-    () => transactions.filter((t) => t.type === 'Expenditure').reduce((s, t) => s + num(t.amount), 0),
-    [transactions]
+    () => filteredTransactions.filter((t) => t.type === 'Expenditure').reduce((s, t) => s + num(t.amount), 0),
+    [filteredTransactions]
   );
 
   const netBalance = useMemo(
@@ -74,13 +104,13 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   );
 
   const monthlySummaries = useMemo(
-    () => computeMonthlySummary(transactions, settings.openingBalance),
-    [transactions, settings.openingBalance]
+    () => computeMonthlySummary(transactions, settings.openingBalance, selectedDashboardYear),
+    [transactions, settings.openingBalance, selectedDashboardYear]
   );
 
   const dailySummaries = useMemo(
-    () => computeDailySummary(transactions, dailyFrom, dailyTo),
-    [transactions, dailyFrom, dailyTo]
+    () => computeDailySummary(filteredTransactions, dailyFrom, dailyTo),
+    [filteredTransactions, dailyFrom, dailyTo]
   );
 
   const last30Days = useMemo(() => dailySummaries.slice(-30), [dailySummaries]);
@@ -88,30 +118,30 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   // Head breakdowns
   const incomeByHead = useMemo(() => {
     const map: Record<string, number> = {};
-    transactions
+    filteredTransactions
       .filter((t) => t.type === 'Income')
       .forEach((t) => {
         const k = t.head || 'Other';
         map[k] = (map[k] || 0) + num(t.amount);
       });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [transactions]);
+  }, [filteredTransactions]);
 
   const expenditureByHead = useMemo(() => {
     const map: Record<string, number> = {};
-    transactions
+    filteredTransactions
       .filter((t) => t.type === 'Expenditure')
       .forEach((t) => {
         const k = t.head || 'Other';
         map[k] = (map[k] || 0) + num(t.amount);
       });
     return Object.entries(map).map(([name, value]) => ({ name, value }));
-  }, [transactions]);
+  }, [filteredTransactions]);
 
   // Top 5 Contributing Members
   const topContributors = useMemo(() => {
     const list = members.map((m) => {
-      const totals = calculateMemberTotals(transactions, m.ledgerNo);
+      const totals = calculateMemberTotals(filteredTransactions, m.ledgerNo);
       const shortName = m.name.length > 15 ? m.name.slice(0, 15) + '…' : m.name;
       return {
         ledgerNo: m.ledgerNo,
@@ -124,7 +154,24 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
 
     list.sort((a, b) => b.totalPaid - a.totalPaid || b.txCount - a.txCount);
     return list.slice(0, 5);
-  }, [members, transactions]);
+  }, [members, filteredTransactions]);
+
+  // Export Multi-Year Statement CSV
+  const handleExportMultiYearCSV = () => {
+    const headers = ['Financial Year', 'Opening Balance (Rs.)', 'Income (Rs.)', 'Income Entries', 'Expenditure (Rs.)', 'Expense Entries', 'Net Surplus/Deficit (Rs.)', 'Closing Balance (Rs.)'];
+    const rows = multiYearSummaries.map((y) => [
+      y.yearLabel,
+      y.openingBalance,
+      y.income,
+      y.incomeCount,
+      y.expenditure,
+      y.expenditureCount,
+      y.net,
+      y.closingBalance,
+    ]);
+    exportCsv(headers, rows, `Multi_Year_Financial_Summary_2019_to_Present.csv`);
+    showToast('Multi-Year financial statement (2019 to Present) exported as CSV.');
+  };
 
   // Available unique months list from transactions
   const availableMonths = useMemo(() => {
@@ -501,17 +548,45 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
   return (
     <div className="space-y-6">
       {/* Top Controls & KPI Grid */}
-      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <label className="text-xs font-semibold text-slate-700">Opening Balance (Rs.):</label>
-          <input
-            type="number"
-            value={openingBal}
-            onChange={handleOpeningBalChange}
-            className="w-32 text-xs font-mono px-3 py-1.5 border border-slate-200 rounded-lg font-bold bg-slate-50 focus:bg-white"
-          />
+      <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-xs flex flex-col md:flex-row items-start md:items-center justify-between gap-3">
+        <div className="flex flex-wrap items-center gap-3">
+          {/* Year Filter Pill Selector */}
+          <div className="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 shadow-2xs">
+            <Calendar className="w-4 h-4 text-emerald-700" />
+            <label className="text-xs font-bold text-slate-700">Financial Year Filter:</label>
+            <select
+              value={selectedDashboardYear}
+              onChange={(e) => setSelectedDashboardYear(e.target.value)}
+              className="bg-transparent text-xs font-mono font-bold text-emerald-900 border-none outline-none cursor-pointer"
+            >
+              <option value="All">All Years (2019 – Present Cumulative)</option>
+              {availableYears.map((y) => (
+                <option key={y} value={y}>
+                  Year {y} ({y}–{(parseInt(y, 10) + 1).toString().slice(-2)})
+                </option>
+              ))}
+            </select>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <label className="text-xs font-semibold text-slate-700">Opening Balance (Rs.):</label>
+            <input
+              type="number"
+              value={openingBal}
+              onChange={handleOpeningBalChange}
+              className="w-28 text-xs font-mono px-3 py-1.5 border border-slate-200 rounded-lg font-bold bg-slate-50 focus:bg-white"
+            />
+          </div>
         </div>
-        <p className="text-xs text-slate-500">Live dashboard updates as transactions and payments are recorded.</p>
+
+        <div className="flex items-center gap-2">
+          {selectedDashboardYear !== 'All' && (
+            <span className="inline-flex items-center px-2.5 py-1 text-xs font-bold text-emerald-800 bg-emerald-50 border border-emerald-200 rounded-full">
+              Active Scope: Year {selectedDashboardYear}
+            </span>
+          )}
+          <p className="text-xs text-slate-500 hidden sm:block">Real-time ledger audit from starting year 2019.</p>
+        </div>
       </div>
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
@@ -922,6 +997,94 @@ export const DashboardTab: React.FC<DashboardTabProps> = ({
                   </tr>
                 </tfoot>
               )}
+            </table>
+          </div>
+        </div>
+      </div>
+
+      {/* ========================================================================= */}
+      {/* FEATURE: MULTI-YEAR FINANCIAL AUDIT & TRENDS (2019 TO PRESENT)             */}
+      {/* ========================================================================= */}
+      <div className="bg-white border border-slate-200 rounded-xl p-5 shadow-xs space-y-4">
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 border-b border-slate-100 pb-3">
+          <div>
+            <h3 className="text-base font-serif font-bold text-slate-900 flex items-center gap-2">
+              <Layers className="w-5 h-5 text-emerald-700" />
+              <span>Multi-Year Financial Ledger & Audit Performance (2019 – Present)</span>
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              Year-by-year income, expenditure, net balance, and cumulative carryovers tracked continuously starting from Base Year 2019.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <button
+              onClick={handleExportMultiYearCSV}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+              title="Export Multi-Year Summary as CSV"
+            >
+              <Download className="w-3.5 h-3.5" />
+              <span>Export Multi-Year CSV</span>
+            </button>
+          </div>
+        </div>
+
+        {/* Multi-Year Bar Chart & Breakdown Grid */}
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-center">
+          {/* Annual Bar Chart */}
+          <div className="lg:col-span-6 h-72 w-full">
+            <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider mb-2 flex items-center gap-1.5">
+              <BarChart3 className="w-4 h-4 text-emerald-600" />
+              <span>Annual Collections vs Expenditures (2019–Present)</span>
+            </h4>
+            <ResponsiveContainer width="100%" height="90%">
+              <BarChart data={multiYearSummaries} margin={{ top: 10, right: 10, left: 10, bottom: 15 }}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#E2E8F0" />
+                <XAxis dataKey="year" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(value) => formatMoney(Number(value))} />
+                <Legend wrapperStyle={{ fontSize: 11 }} />
+                <Bar dataKey="income" name="Annual Income" fill="#2E6E4E" radius={[4, 4, 0, 0]} />
+                <Bar dataKey="expenditure" name="Annual Expenditure" fill="#A63D40" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+
+          {/* Multi-Year Table */}
+          <div className="lg:col-span-6 border border-slate-200 rounded-xl overflow-hidden overflow-x-auto max-h-72 overflow-y-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-slate-800 text-white font-serif uppercase tracking-wider text-[10px] sticky top-0">
+                <tr>
+                  <th className="py-2.5 px-3">Year / Session</th>
+                  <th className="py-2.5 px-3 text-right">Opening (Rs.)</th>
+                  <th className="py-2.5 px-3 text-right">Income (Rs.)</th>
+                  <th className="py-2.5 px-3 text-right">Expenditure</th>
+                  <th className="py-2.5 px-3 text-right">Closing (Rs.)</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {multiYearSummaries.map((y) => (
+                  <tr
+                    key={y.year}
+                    onClick={() => setSelectedDashboardYear(selectedDashboardYear === y.year ? 'All' : y.year)}
+                    className={`cursor-pointer transition-colors ${
+                      selectedDashboardYear === y.year ? 'bg-emerald-50 font-bold' : 'hover:bg-slate-50'
+                    }`}
+                    title="Click to filter dashboard to this year"
+                  >
+                    <td className="py-2 px-3 font-bold text-slate-900 flex items-center gap-1.5">
+                      <span>{y.year}</span>
+                      {selectedDashboardYear === y.year && (
+                        <span className="text-[9px] bg-emerald-600 text-white px-1.5 py-0.2 rounded">Selected</span>
+                      )}
+                    </td>
+                    <td className="py-2 px-3 text-right text-slate-600">{formatMoney(y.openingBalance)}</td>
+                    <td className="py-2 px-3 text-right text-emerald-700 font-semibold">{formatMoney(y.income)}</td>
+                    <td className="py-2 px-3 text-right text-rose-700">{formatMoney(y.expenditure)}</td>
+                    <td className="py-2 px-3 text-right font-bold text-slate-900">{formatMoney(y.closingBalance)}</td>
+                  </tr>
+                ))}
+              </tbody>
             </table>
           </div>
         </div>

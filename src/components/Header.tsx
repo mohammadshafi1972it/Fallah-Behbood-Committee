@@ -1,6 +1,7 @@
 import React from 'react';
 import { StorageStatus, AppSettings } from '../types';
-import { HardDrive, Cloud, FileSpreadsheet, RefreshCw, Trash2, ShieldCheck, CheckCircle2, AlertCircle } from 'lucide-react';
+import { HardDrive, Cloud, FileSpreadsheet, RefreshCw, Trash2, ShieldCheck, CheckCircle2, AlertCircle, Calendar } from 'lucide-react';
+import { getAvailableSessions } from '../lib/ledgerUtils';
 
 interface HeaderProps {
   settings: AppSettings;
@@ -9,6 +10,7 @@ interface HeaderProps {
   onOpenExcelModal: () => void;
   onClearAllData: () => void;
   onSyncGoogleNow: () => void;
+  onUpdateSessionTag?: (tag: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
@@ -18,21 +20,36 @@ export const Header: React.FC<HeaderProps> = ({
   onOpenExcelModal,
   onClearAllData,
   onSyncGoogleNow,
+  onUpdateSessionTag,
 }) => {
+  const availableSessions = getAvailableSessions();
+
   return (
     <header className="mb-6 bg-white border-b border-amber-200/80 rounded-xl p-5 shadow-sm">
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <h1 className="font-serif text-2xl md:text-3xl font-bold text-slate-800 tracking-tight">
               {settings.organizationName || 'Fallah Behbood Committee'}
             </h1>
-            <span className="inline-block px-2.5 py-1 text-xs font-mono uppercase tracking-wider font-semibold text-amber-800 bg-amber-100/80 border border-amber-300 rounded">
-              {settings.sessionTag || 'Session 2026–27'}
-            </span>
+            <div className="flex items-center gap-1.5 bg-amber-50 border border-amber-300 rounded px-2 py-0.5 shadow-2xs">
+              <Calendar className="w-3.5 h-3.5 text-amber-700" />
+              <select
+                value={settings.sessionTag || 'Session 2026–27'}
+                onChange={(e) => onUpdateSessionTag && onUpdateSessionTag(e.target.value)}
+                className="bg-transparent text-xs font-mono font-bold text-amber-900 border-none outline-none cursor-pointer pr-1"
+                title="Select Financial Year / Session (from 2019 onwards)"
+              >
+                {availableSessions.map((sess) => (
+                  <option key={sess} value={sess} className="bg-white text-slate-800">
+                    {sess}
+                  </option>
+                ))}
+              </select>
+            </div>
           </div>
           <p className="text-sm text-slate-600 mt-1">
-            {settings.subTitle || 'Income & Expenditure Ledger — Pampore'}
+            {settings.subTitle || 'Income & Expenditure Ledger — Pampore (Year-based from 2019)'}
           </p>
         </div>
 

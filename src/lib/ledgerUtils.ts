@@ -10,8 +10,137 @@ import {
   MonthBalanceTableRow,
   MonthBalanceOverrides,
   MemberBalanceItem,
-  MonthEndMemberBalanceItem
+  MonthEndMemberBalanceItem,
+  YearSummaryItem,
+  MemberYearlySummary
 } from '../types';
+
+export const BASE_START_YEAR = 2019;
+
+/**
+ * Returns list of all available years starting from 2019 up to current or latest transaction year
+ */
+export function getAvailableYears(transactions?: Transaction[], startYear: number = BASE_START_YEAR): string[] {
+  const currentYear = new Date().getFullYear();
+  let maxYear = Math.max(currentYear, 2027);
+
+  if (transactions && transactions.length > 0) {
+    transactions.forEach((t) => {
+      if (t.date && t.date.length >= 4) {
+        const y = parseInt(t.date.slice(0, 4), 10);
+        if (!isNaN(y) && y > maxYear) maxYear = y;
+      }
+    });
+  }
+
+  const years: string[] = [];
+  for (let y = startYear; y <= maxYear; y++) {
+    years.push(String(y));
+  }
+  return years;
+}
+
+/**
+ * Returns available financial session tags starting from 2019 (e.g. Session 2019–20, Session 2020–21, ...)
+ */
+export function getAvailableSessions(transactions?: Transaction[], startYear: number = BASE_START_YEAR): string[] {
+  const years = getAvailableYears(transactions, startYear);
+  return years.map((y) => {
+    const nextY = (parseInt(y, 10) + 1).toString().slice(-2);
+    return `Session ${y}–${nextY}`;
+  });
+}
+
+/**
+ * Computes year-by-year summary with running opening balances starting from 2019
+ */
+export function computeMultiYearSummary(
+  transactions: Transaction[],
+  initialOpeningBalance: number = 0,
+  startYear: number = BASE_START_YEAR
+): YearSummaryItem[] {
+  const years = getAvailableYears(transactions, startYear);
+  let runningOpening = num(initialOpeningBalance);
+  const result: YearSummaryItem[] = [];
+
+  for (const yearStr of years) {
+    const yearTxns = transactions.filter((t) => t.date && t.date.startsWith(yearStr));
+    const incomeTxns = yearTxns.filter((t) => t.type === 'Income');
+    const expTxns = yearTxns.filter((t) => t.type === 'Expenditure');
+
+    const income = incomeTxns.reduce((sum, t) => sum + num(t.amount), 0);
+    const expenditure = expTxns.reduce((sum, t) => sum + num(t.amount), 0);
+    const net = income - expenditure;
+    const closingBalance = runningOpening + net;
+
+    const nextY = (parseInt(yearStr, 10) + 1).toString().slice(-2);
+
+    result.push({
+      year: yearStr,
+      yearLabel: `Year ${yearStr} (${yearStr}–${nextY})`,
+      startDate: `${yearStr}-01-01`,
+      endDate: `${yearStr}-12-31`,
+      openingBalance: runningOpening,
+      income,
+      incomeCount: incomeTxns.length,
+      expenditure,
+      expenditureCount: expTxns.length,
+      net,
+      closingBalance,
+    });
+
+    // Carry forward closing balance to next year's opening
+    runningOpening = closingBalance;
+  }
+
+  return result;
+}
+
+/**
+ * Computes year-by-year contribution breakdown for a specific member from 2019 to current year
+ */
+export function computeMemberYearlyBreakdown(
+  member: Member,
+  transactions: Transaction[],
+  startYear: number = BASE_START_YEAR
+): MemberYearlySummary[] {
+  const years = getAvailableYears(transactions, startYear);
+  const lNo = String(member.ledgerNo || '').trim();
+  const monthlyDue = getMemberMonthlyDue(member);
+  const expectedAnnualDue = monthlyDue * 12;
+
+  const memberTxns = transactions.filter(
+    (t) => t.type === 'Income' && String(t.ledgerNo || '').trim() === lNo
+  );
+
+  return years.map((yearStr) => {
+    const yearIncome = memberTxns
+      .filter((t) => t.date && t.date.startsWith(yearStr))
+      .reduce((sum, t) => sum + num(t.amount), 0);
+    
+    const receiptsCount = memberTxns.filter((t) => t.date && t.date.startsWith(yearStr)).length;
+    const outstanding = Math.max(0, expectedAnnualDue - yearIncome);
+    
+    let status: 'Paid' | 'Partial' | 'Due' = 'Due';
+    if (yearIncome >= expectedAnnualDue) {
+      status = 'Paid';
+    } else if (yearIncome > 0) {
+      status = 'Partial';
+    }
+
+    const nextY = (parseInt(yearStr, 10) + 1).toString().slice(-2);
+
+    return {
+      year: yearStr,
+      yearLabel: `${yearStr}–${nextY}`,
+      expectedDue: expectedAnnualDue,
+      paid: yearIncome,
+      outstanding,
+      receiptsCount,
+      status,
+    };
+  });
+}
 
 export const INCOME_HEADS = [
   'Imam Fund',
@@ -1262,12 +1391,17 @@ export function exportMonthEndConsolidatedMemberExcel(
   XLSX.writeFile(wb, filename);
 }
 
-export function computeMonthlySummary(transactions: Transaction[], openingBalance: number): MonthlySummaryItem[] {
+export function computeMonthlySummary(
+  transactions: Transaction[], 
+  openingBalance: number,
+  filterYear?: string
+): MonthlySummaryItem[] {
   const byMonth: Record<string, { income: number; expenditure: number }> = {};
   
   transactions.forEach(t => {
     if (!t.date) return;
     const m = t.date.slice(0, 7);
+    if (filterYear && filterYear !== 'All' && !m.startsWith(filterYear)) return;
     if (!byMonth[m]) byMonth[m] = { income: 0, expenditure: 0 };
     if (t.type === 'Income') {
       byMonth[m].income += num(t.amount);
@@ -1303,10 +1437,19 @@ export function getMonthLabel(mStr: string): string {
 export function computeMonthBalanceTable(
   transactions: Transaction[],
   initialOpeningBalance: number,
-  overrides?: MonthBalanceOverrides
+  overrides?: MonthBalanceOverrides,
+  filterYear?: string
 ): MonthBalanceTableRow[] {
-  // Collect all distinct months
+  // Collect all distinct months starting from 2019
   const monthSet = new Set<string>();
+
+  // If a specific year is requested (e.g. "2019", "2020", "2026")
+  if (filterYear && filterYear !== 'All' && /^\d{4}$/.test(filterYear)) {
+    // Generate all 12 calendar months for that year
+    for (let m = 1; m <= 12; m++) {
+      monthSet.add(`${filterYear}-${String(m).padStart(2, '0')}`);
+    }
+  }
 
   transactions.forEach((t) => {
     if (t.date && t.date.length >= 7) {
@@ -1325,12 +1468,13 @@ export function computeMonthBalanceTable(
   const currentMonth = new Date().toISOString().slice(0, 7);
   monthSet.add(currentMonth);
 
-  const sortedMonths = Array.from(monthSet).sort();
+  // If filterYear is "All" or not provided, ensure at least starting year 2019 months or sorted months
+  const allSortedMonths = Array.from(monthSet).sort();
 
   let runningOpening = num(initialOpeningBalance);
-  const rows: MonthBalanceTableRow[] = [];
+  const allRows: MonthBalanceTableRow[] = [];
 
-  for (const m of sortedMonths) {
+  for (const m of allSortedMonths) {
     const monthTxns = transactions.filter((t) => (t.date && t.date.slice(0, 7) === m));
     const incomeTxns = monthTxns.filter((t) => t.type === 'Income');
     const expTxns = monthTxns.filter((t) => t.type === 'Expenditure');
@@ -1355,7 +1499,7 @@ export function computeMonthBalanceTable(
     const variance = effectiveBalance - autoBalance;
     const isReconciled = mode === 'auto' || Math.abs(variance) < 0.01;
 
-    rows.push({
+    allRows.push({
       month: m,
       monthLabel: getMonthLabel(m),
       openingBalance: runningOpening,
@@ -1380,7 +1524,12 @@ export function computeMonthBalanceTable(
     runningOpening = effectiveBalance;
   }
 
-  return rows;
+  // Filter rows if a specific year was requested
+  if (filterYear && filterYear !== 'All') {
+    return allRows.filter((r) => r.month.startsWith(filterYear));
+  }
+
+  return allRows;
 }
 
 export interface WhatsAppReportParams {

@@ -1,8 +1,22 @@
 import React, { useState, useMemo } from 'react';
 import { Transaction, Member, TransactionType } from '../types';
-import { INCOME_HEADS, EXPENDITURE_HEADS, todayISO, fmtDate, formatMoney, num, uid, normalizeName, parseExcelDate, parseUniversalFileImport, findMember } from '../lib/ledgerUtils';
+import { 
+  INCOME_HEADS, 
+  EXPENDITURE_HEADS, 
+  todayISO, 
+  fmtDate, 
+  formatMoney, 
+  num, 
+  uid, 
+  normalizeName, 
+  parseExcelDate, 
+  parseUniversalFileImport, 
+  findMember,
+  getAvailableYears,
+  BASE_START_YEAR
+} from '../lib/ledgerUtils';
 import * as XLSX from 'xlsx';
-import { PlusCircle, Search, Filter, Download, FileSpreadsheet, Upload, Edit, Trash2, CheckCircle2, AlertCircle, X } from 'lucide-react';
+import { PlusCircle, Search, Filter, Download, FileSpreadsheet, Upload, Edit, Trash2, CheckCircle2, AlertCircle, X, Calendar } from 'lucide-react';
 
 interface LedgerTabProps {
   transactions: Transaction[];
@@ -34,7 +48,11 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
   const [remarks, setRemarks] = useState<string>('');
   const [editingId, setEditingId] = useState<string | null>(null);
 
+  // Available Years starting from 2019
+  const availableYears = useMemo(() => getAvailableYears(transactions, BASE_START_YEAR), [transactions]);
+
   // Filters
+  const [selectedLedgerYear, setSelectedLedgerYear] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [filterType, setFilterType] = useState<string>('');
   const [filterFrom, setFilterFrom] = useState<string>('');
@@ -193,6 +211,7 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
   const filteredTxns = useMemo(() => {
     return transactions
       .filter((t) => {
+        if (selectedLedgerYear !== 'All' && (!t.date || !t.date.startsWith(selectedLedgerYear))) return false;
         if (filterType && t.type !== filterType) return false;
         if (filterFrom && t.date < filterFrom) return false;
         if (filterTo && t.date > filterTo) return false;
@@ -214,7 +233,7 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
         vb = String(vb || '').toLowerCase();
         return va.localeCompare(vb) * dir;
       });
-  }, [transactions, filterType, filterFrom, filterTo, searchQuery, sortKey, sortDir]);
+  }, [transactions, selectedLedgerYear, filterType, filterFrom, filterTo, searchQuery, sortKey, sortDir]);
 
   const handleSort = (key: keyof Transaction) => {
     if (sortKey === key) {
@@ -489,6 +508,22 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
           </div>
 
           <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5">
+              <Calendar className="w-3.5 h-3.5 text-emerald-700" />
+              <select
+                value={selectedLedgerYear}
+                onChange={(e) => setSelectedLedgerYear(e.target.value)}
+                className="text-xs bg-transparent font-bold text-slate-800 outline-none cursor-pointer"
+              >
+                <option value="All">All Years (2019+)</option>
+                {availableYears.map((y) => (
+                  <option key={y} value={y}>
+                    Year {y}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             <select
               value={filterType}
               onChange={(e) => setFilterType(e.target.value)}
@@ -515,15 +550,16 @@ export const LedgerTab: React.FC<LedgerTabProps> = ({
               title="To Date"
             />
 
-            {(filterType || filterFrom || filterTo || searchQuery) && (
+            {(selectedLedgerYear !== 'All' || filterType || filterFrom || filterTo || searchQuery) && (
               <button
                 onClick={() => {
+                  setSelectedLedgerYear('All');
                   setFilterType('');
                   setFilterFrom('');
                   setFilterTo('');
                   setSearchQuery('');
                 }}
-                className="p-2 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100"
+                className="p-2 text-slate-500 hover:text-slate-800 rounded-lg hover:bg-slate-100 cursor-pointer"
                 title="Clear Filters"
               >
                 <X className="w-4 h-4" />

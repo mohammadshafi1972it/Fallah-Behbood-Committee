@@ -331,6 +331,10 @@ export default function App() {
           onOpenExcelModal={() => setIsExcelModalOpen(true)}
           onClearAllData={handleClearAllData}
           onSyncGoogleNow={handleSyncGoogleNow}
+          onUpdateSessionTag={(newTag) => {
+            setSettings((prev) => ({ ...prev, sessionTag: newTag }));
+            showToast(`Active session changed to ${newTag}`);
+          }}
         />
 
         {/* Main Navigation Tabs */}

@@ -1,7 +1,17 @@
 import React, { useState, useMemo } from 'react';
 import { Member, Transaction } from '../types';
-import { fmtDate, formatMoney, calculateMemberTotals, exportCsv, findMember, INCOME_HEADS } from '../lib/ledgerUtils';
-import { X, Printer, Download, FileText, Search, Filter, ArrowRightLeft, Calendar, Pencil, Trash2, CheckCircle2, Save } from 'lucide-react';
+import { 
+  fmtDate, 
+  formatMoney, 
+  calculateMemberTotals, 
+  exportCsv, 
+  findMember, 
+  INCOME_HEADS,
+  computeMemberYearlyBreakdown,
+  getAvailableYears,
+  BASE_START_YEAR
+} from '../lib/ledgerUtils';
+import { X, Printer, Download, FileText, Search, Filter, ArrowRightLeft, Calendar, Pencil, Trash2, CheckCircle2, Save, Layers } from 'lucide-react';
 
 interface MemberHistoryModalProps {
   isOpen: boolean;
@@ -33,6 +43,12 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
   const [selectedHead, setSelectedHead] = useState<string>('All');
   const [searchQuery, setSearchQuery] = useState<string>('');
 
+  // Yearly Breakdown from 2019 to Present for this member
+  const yearlyBreakdown = useMemo(() => {
+    if (!member) return [];
+    return computeMemberYearlyBreakdown(transactions, member, BASE_START_YEAR);
+  }, [transactions, member]);
+
   // Editing state
   const [editingTxn, setEditingTxn] = useState<Transaction | null>(null);
   const [editDate, setEditDate] = useState<string>('');
@@ -53,14 +69,8 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
 
   // Extract available years & heads
   const availableYears = useMemo(() => {
-    const years = new Set<string>();
-    allMemberTxns.forEach((t) => {
-      if (t.date && t.date.length >= 4) {
-        years.add(t.date.substring(0, 4));
-      }
-    });
-    return Array.from(years).sort().reverse();
-  }, [allMemberTxns]);
+    return getAvailableYears(transactions, BASE_START_YEAR);
+  }, [transactions]);
 
   const availableHeads = useMemo(() => {
     const heads = new Set<string>();
@@ -333,7 +343,7 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
         </div>
 
         {/* Member Statistics Summary */}
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/80 p-4 rounded-xl border border-slate-200/80 mb-5">
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 bg-slate-50/80 p-4 rounded-xl border border-slate-200/80 mb-4">
           <div className="bg-white p-3 rounded-lg border border-slate-100 shadow-2xs">
             <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider block">Monthly Subscription</span>
             <span className="text-sm font-bold text-slate-800 font-mono mt-0.5 block">{formatMoney(member.monthlyDue)}</span>
@@ -354,6 +364,80 @@ export const MemberHistoryModal: React.FC<MemberHistoryModalProps> = ({
             <span className="text-xs font-bold text-slate-700 mt-1 block">
               {totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : 'No payments'}
             </span>
+          </div>
+        </div>
+
+        {/* Multi-Year Subscription Audit (2019 – Present) */}
+        <div className="bg-white border border-slate-200 rounded-xl p-4 mb-5 shadow-2xs">
+          <div className="flex items-center justify-between pb-2 mb-2 border-b border-slate-100">
+            <div className="flex items-center gap-2">
+              <Layers className="w-4 h-4 text-emerald-700" />
+              <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                Annual Subscription Breakdown (2019 – Present)
+              </h3>
+            </div>
+            <span className="text-[10px] text-slate-500 font-mono">
+              Base Rate: Rs. {member.monthlyDue}/PM (Annual Standard: Rs. {member.monthlyDue * 12})
+            </span>
+          </div>
+
+          <div className="overflow-x-auto max-h-44 overflow-y-auto">
+            <table className="w-full text-left text-xs font-mono">
+              <thead className="bg-slate-100 text-slate-700 uppercase tracking-wider text-[10px] sticky top-0">
+                <tr>
+                  <th className="py-2 px-3">Year / Session</th>
+                  <th className="py-2 px-3 text-right">Expected Due</th>
+                  <th className="py-2 px-3 text-right">Paid in Year</th>
+                  <th className="py-2 px-3 text-right">Balance Due</th>
+                  <th className="py-2 px-3 text-center">Status</th>
+                  <th className="py-2 px-3 text-center">Paid Upto</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {yearlyBreakdown.map((yb) => (
+                  <tr
+                    key={yb.year}
+                    onClick={() => setSelectedYear(selectedYear === yb.year ? 'All' : yb.year)}
+                    className={`cursor-pointer transition-colors ${
+                      selectedYear === yb.year ? 'bg-emerald-50 font-bold' : 'hover:bg-slate-50'
+                    }`}
+                    title="Click to filter entries to this year"
+                  >
+                    <td className="py-1.5 px-3 font-bold text-slate-900 flex items-center gap-1">
+                      <span>{yb.year}</span>
+                      {selectedYear === yb.year && (
+                        <span className="text-[9px] bg-emerald-600 text-white px-1 rounded">Filtered</span>
+                      )}
+                    </td>
+                    <td className="py-1.5 px-3 text-right text-slate-600">{formatMoney(yb.expectedAnnualDue)}</td>
+                    <td className="py-1.5 px-3 text-right text-emerald-800 font-semibold">{formatMoney(yb.totalPaid)}</td>
+                    <td
+                      className={`py-1.5 px-3 text-right font-bold ${
+                        yb.outstandingBalance > 0 ? 'text-rose-700' : 'text-emerald-700'
+                      }`}
+                    >
+                      {formatMoney(yb.outstandingBalance)}
+                    </td>
+                    <td className="py-1.5 px-3 text-center">
+                      <span
+                        className={`inline-block px-2 py-0.5 rounded-full text-[10px] font-sans font-bold ${
+                          yb.status === 'Paid'
+                            ? 'bg-emerald-100 text-emerald-800'
+                            : yb.status === 'Partial'
+                            ? 'bg-amber-100 text-amber-900'
+                            : 'bg-rose-100 text-rose-800'
+                        }`}
+                      >
+                        {yb.status}
+                      </span>
+                    </td>
+                    <td className="py-1.5 px-3 text-center text-slate-600 text-[11px] font-sans">
+                      {yb.paidUptoMonth || 'None'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           </div>
         </div>
 
