@@ -1,0 +1,463 @@
+import React, { useState, useMemo } from 'react';
+import { 
+  X, 
+  Send, 
+  Copy, 
+  Check, 
+  MessageSquare, 
+  Share2, 
+  Sparkles, 
+  PhoneCall, 
+  Printer, 
+  FileText, 
+  CheckCircle2, 
+  ChevronDown, 
+  SlidersHorizontal,
+  ExternalLink,
+  Users,
+  Banknote
+} from 'lucide-react';
+import { MonthBalanceTableRow, Transaction, Member, AppSettings } from '../types';
+import { buildWhatsAppMonthReport, formatMoney, findMember } from '../lib/ledgerUtils';
+
+interface MonthBalanceReportModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  monthRow: MonthBalanceTableRow | null;
+  transactions: Transaction[];
+  members: Member[];
+  settings: AppSettings;
+  showToast: (msg: string) => void;
+}
+
+export const MonthBalanceReportModal: React.FC<MonthBalanceReportModalProps> = ({
+  isOpen,
+  onClose,
+  monthRow,
+  transactions,
+  members,
+  settings,
+  showToast,
+}) => {
+  if (!isOpen || !monthRow) return null;
+
+  const [style, setStyle] = useState<'standard' | 'itemized' | 'urdu' | 'english'>('standard');
+  const [includeExpenses, setIncludeExpenses] = useState(true);
+  const [includeIncome, setIncludeIncome] = useState(true);
+  const [includeMembers, setIncludeMembers] = useState(true);
+  const [customNote, setCustomNote] = useState('');
+  const [signatoryName, setSignatoryName] = useState('Management Committee, ' + (settings.organizationName || 'Fallah Behbood Committee'));
+  const [copied, setCopied] = useState(false);
+  const [showAdvanced, setShowAdvanced] = useState(false);
+
+  // Individual vs Group target
+  const [targetType, setTargetType] = useState<'group' | 'individual'>('group');
+  const [selectedMemberLedger, setSelectedMemberLedger] = useState<string>('');
+  const [customPhoneNumber, setCustomPhoneNumber] = useState<string>('');
+
+  // When member selected, set their phone
+  const handleMemberSelect = (ledgerNo: string) => {
+    setSelectedMemberLedger(ledgerNo);
+    const m = findMember(members, ledgerNo);
+    if (m && m.phone) {
+      setCustomPhoneNumber(m.phone);
+    }
+  };
+
+  // Generate Report Text
+  const reportText = useMemo(() => {
+    return buildWhatsAppMonthReport({
+      monthRow,
+      transactions,
+      members,
+      settings,
+      style,
+      includeExpenses,
+      includeIncome,
+      includeMembers,
+      customNote,
+      signatoryName,
+    });
+  }, [
+    monthRow,
+    transactions,
+    members,
+    settings,
+    style,
+    includeExpenses,
+    includeIncome,
+    includeMembers,
+    customNote,
+    signatoryName,
+  ]);
+
+  // Clean phone number for WhatsApp
+  const cleanPhone = (phoneStr: string) => {
+    let clean = phoneStr.replace(/[^0-9]/g, '');
+    if (clean.startsWith('0')) {
+      clean = clean.substring(1);
+    }
+    if (clean.length === 10) {
+      clean = '91' + clean; // Default to India (+91)
+    }
+    return clean;
+  };
+
+  const handleShareWhatsApp = () => {
+    const encodedText = encodeURIComponent(reportText);
+    let url = '';
+
+    if (targetType === 'individual' && customPhoneNumber.trim()) {
+      const p = cleanPhone(customPhoneNumber);
+      url = `https://api.whatsapp.com/send?phone=${p}&text=${encodedText}`;
+    } else {
+      url = `https://api.whatsapp.com/send?text=${encodedText}`;
+    }
+
+    window.open(url, '_blank');
+    showToast('Opening WhatsApp with Month Balance Report...');
+  };
+
+  const handleCopyText = async () => {
+    try {
+      await navigator.clipboard.writeText(reportText);
+      setCopied(true);
+      showToast('Report text copied to clipboard! Ready to paste into WhatsApp.');
+      setTimeout(() => setCopied(false), 2500);
+    } catch (err) {
+      showToast('Failed to copy text.');
+    }
+  };
+
+  const handlePrint = () => {
+    const printWin = window.open('', '_blank');
+    if (!printWin) {
+      showToast('Popups blocked. Please allow popups to print.');
+      return;
+    }
+
+    const html = `
+      <!DOCTYPE html>
+      <html>
+        <head>
+          <title>${settings.organizationName || 'Committee'} - Financial Report ${monthRow.monthLabel}</title>
+          <style>
+            body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; padding: 30px; color: #1e293b; }
+            h1 { font-size: 20px; margin: 0; color: #0f172a; }
+            h2 { font-size: 14px; margin: 4px 0 20px; color: #64748b; font-weight: normal; }
+            pre { white-space: pre-wrap; word-wrap: break-word; font-family: monospace; font-size: 12px; background: #f8fafc; padding: 16px; border: 1px solid #cbd5e1; border-radius: 8px; line-height: 1.6; }
+            .footer { margin-top: 24px; font-size: 11px; color: #94a3b8; text-align: center; border-top: 1px solid #e2e8f0; padding-top: 12px; }
+            @media print { body { padding: 10px; } }
+          </style>
+        </head>
+        <body>
+          <h1>${settings.organizationName || 'Fallah Behbood Committee'}</h1>
+          <h2>Month End Financial Statement — ${monthRow.monthLabel}</h2>
+          <pre>${reportText}</pre>
+          <div class="footer">Generated by Fallah Behbood Committee Financial Management System on ${new Date().toLocaleString()}</div>
+          <script>
+            window.onload = function() { window.print(); }
+          </script>
+        </body>
+      </html>
+    `;
+
+    printWin.document.write(html);
+    printWin.document.close();
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 backdrop-blur-xs p-4 overflow-y-auto">
+      <div className="bg-white rounded-xl shadow-xl border border-slate-200 max-w-4xl w-full p-6 relative animate-in fade-in zoom-in duration-150 my-6 max-h-[92vh] overflow-y-auto">
+        <button
+          onClick={onClose}
+          className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 cursor-pointer"
+        >
+          <X className="w-5 h-5" />
+        </button>
+
+        {/* Header */}
+        <div className="flex items-center gap-3 border-b border-slate-100 pb-4 mb-5">
+          <div className="p-2.5 bg-emerald-50 text-emerald-700 rounded-xl">
+            <MessageSquare className="w-6 h-6" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <span>Generate WhatsApp Month Balance Report</span>
+              <span className="px-2 py-0.5 bg-emerald-100 text-emerald-800 text-[11px] rounded-md font-mono">
+                {monthRow.monthLabel}
+              </span>
+            </h2>
+            <p className="text-xs text-slate-500">
+              Create and share a formal monthly income, expense & balance statement with committee members.
+            </p>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Controls & Configuration (Left Column) */}
+          <div className="lg:col-span-5 space-y-4">
+            {/* Style Selector */}
+            <div>
+              <label className="text-xs font-bold text-slate-800 block mb-1.5">
+                Report Language & Format Style
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setStyle('standard')}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-all cursor-pointer ${
+                    style === 'standard'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-bold shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <p className="flex items-center gap-1.5">
+                    <span>🕌 Bilingual</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-normal">Urdu + English Standard</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStyle('urdu')}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-all cursor-pointer ${
+                    style === 'urdu'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-bold shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <p className="flex items-center gap-1.5">
+                    <span>🇵🇰 اردو نوٹس</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-normal">Pure Urdu Notice</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStyle('english')}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-all cursor-pointer ${
+                    style === 'english'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-bold shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <p className="flex items-center gap-1.5">
+                    <span>🇬🇧 English</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-normal">English Statement</p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setStyle('itemized')}
+                  className={`px-3 py-2 text-xs font-semibold rounded-lg border text-left transition-all cursor-pointer ${
+                    style === 'itemized'
+                      ? 'bg-emerald-50 border-emerald-500 text-emerald-900 font-bold shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <p className="flex items-center gap-1.5">
+                    <span>📑 Itemized Vouchers</span>
+                  </p>
+                  <p className="text-[10px] text-slate-500 font-normal">Full line-by-line list</p>
+                </button>
+              </div>
+            </div>
+
+            {/* Target Mode: Group Broadcast vs Individual */}
+            <div>
+              <label className="text-xs font-bold text-slate-800 block mb-1.5">
+                Share Destination
+              </label>
+              <div className="grid grid-cols-2 gap-1.5">
+                <button
+                  type="button"
+                  onClick={() => setTargetType('group')}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    targetType === 'group'
+                      ? 'bg-slate-800 text-white border-slate-800 shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <Users className="w-3.5 h-3.5" />
+                  <span>Committee WhatsApp Group</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setTargetType('individual')}
+                  className={`py-2 px-3 text-xs font-bold rounded-lg border flex items-center justify-center gap-1.5 transition-colors cursor-pointer ${
+                    targetType === 'individual'
+                      ? 'bg-slate-800 text-white border-slate-800 shadow-2xs'
+                      : 'bg-white border-slate-200 text-slate-700 hover:bg-slate-50'
+                  }`}
+                >
+                  <PhoneCall className="w-3.5 h-3.5" />
+                  <span>Specific Member / Number</span>
+                </button>
+              </div>
+
+              {targetType === 'individual' && (
+                <div className="mt-2 space-y-2 p-3 bg-slate-50 border border-slate-200 rounded-xl animate-in fade-in">
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                      Choose Member:
+                    </label>
+                    <select
+                      value={selectedMemberLedger}
+                      onChange={(e) => handleMemberSelect(e.target.value)}
+                      className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg"
+                    >
+                      <option value="">-- Choose from Directory --</option>
+                      {members.map((m) => (
+                        <option key={m.ledgerNo} value={m.ledgerNo}>
+                          #{m.ledgerNo} — {m.name} {m.phone ? `(${m.phone})` : ''}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="text-[11px] font-semibold text-slate-700 block mb-1">
+                      WhatsApp Phone Number:
+                    </label>
+                    <input
+                      type="tel"
+                      placeholder="e.g. 9419012345 or +91..."
+                      value={customPhoneNumber}
+                      onChange={(e) => setCustomPhoneNumber(e.target.value)}
+                      className="w-full text-xs px-2.5 py-1.5 bg-white border border-slate-300 rounded-lg font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Content Toggles */}
+            <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-2.5">
+              <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider block">
+                Include in Report:
+              </span>
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeIncome}
+                  onChange={(e) => setIncludeIncome(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Income breakdown by fund/head</span>
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeExpenses}
+                  onChange={(e) => setIncludeExpenses(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Major expenditures breakdown</span>
+              </label>
+
+              <label className="flex items-center gap-2 text-xs text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={includeMembers}
+                  onChange={(e) => setIncludeMembers(e.target.checked)}
+                  className="rounded text-emerald-600 focus:ring-emerald-500"
+                />
+                <span>Member subscription counts (Cleared vs Pending)</span>
+              </label>
+            </div>
+
+            {/* Custom Announcement / Note */}
+            <div>
+              <label className="text-xs font-bold text-slate-800 block mb-1">
+                Custom Announcement / Committee Notice (Optional):
+              </label>
+              <textarea
+                rows={2}
+                placeholder="e.g. General committee meeting on Friday after Asr prayer."
+                value={customNote}
+                onChange={(e) => setCustomNote(e.target.value)}
+                className="w-full text-xs px-3 py-2 bg-white border border-slate-300 rounded-lg focus:outline-emerald-600"
+              />
+            </div>
+
+            {/* Signatory */}
+            <div>
+              <label className="text-xs font-semibold text-slate-700 block mb-1">
+                Signatory / Issued By:
+              </label>
+              <input
+                type="text"
+                value={signatoryName}
+                onChange={(e) => setSignatoryName(e.target.value)}
+                className="w-full text-xs px-3 py-1.5 bg-white border border-slate-300 rounded-lg focus:outline-emerald-600"
+              />
+            </div>
+          </div>
+
+          {/* WhatsApp Preview Card (Right Column) */}
+          <div className="lg:col-span-7 flex flex-col">
+            <div className="flex items-center justify-between mb-2">
+              <span className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
+                <span>📱 WhatsApp Live Message Preview</span>
+              </span>
+              <span className="text-[11px] text-slate-400">
+                {monthRow.mode === 'manual' ? '✍️ Using Manual Balance' : '⚡ Using Automatic Ledger Balance'}
+              </span>
+            </div>
+
+            {/* WhatsApp Chat Style Container */}
+            <div className="flex-1 bg-[#EFEAE2] p-4 rounded-xl border border-slate-300 shadow-inner flex flex-col justify-between overflow-hidden">
+              <div className="bg-white p-4 rounded-lg shadow-sm border border-slate-200 text-slate-800 font-sans text-xs whitespace-pre-wrap leading-relaxed max-h-[420px] overflow-y-auto select-text selection:bg-emerald-100">
+                {reportText}
+              </div>
+
+              <div className="mt-3 pt-3 border-t border-slate-300/60 flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={handleCopyText}
+                    className="px-3.5 py-2 text-xs font-bold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                  >
+                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-600" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copied ? 'Copied to Clipboard!' : 'Copy Text'}</span>
+                  </button>
+
+                  <button
+                    onClick={handlePrint}
+                    className="px-3 py-2 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors inline-flex items-center gap-1.5 shadow-2xs cursor-pointer"
+                    title="Print formal statement"
+                  >
+                    <Printer className="w-3.5 h-3.5" />
+                    <span>Print / PDF</span>
+                  </button>
+                </div>
+
+                <button
+                  onClick={handleShareWhatsApp}
+                  className="px-5 py-2 text-xs font-bold text-white bg-[#25D366] hover:bg-[#1EBE5D] rounded-lg transition-all shadow-xs inline-flex items-center gap-2 cursor-pointer hover:shadow-sm"
+                >
+                  <Send className="w-4 h-4" />
+                  <span>Share on WhatsApp</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer */}
+        <div className="mt-5 pt-3 border-t border-slate-100 flex justify-end">
+          <button
+            onClick={onClose}
+            className="px-4 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
+          >
+            Close
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};

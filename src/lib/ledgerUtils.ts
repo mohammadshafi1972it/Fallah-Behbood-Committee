@@ -1,5 +1,15 @@
 import * as XLSX from 'xlsx';
-import { Member, Transaction, AppSettings, MonthlySummaryItem, DailySummaryItem, MemberTotals, ContributionItem } from '../types';
+import { 
+  Member, 
+  Transaction, 
+  AppSettings, 
+  MonthlySummaryItem, 
+  DailySummaryItem, 
+  MemberTotals, 
+  ContributionItem,
+  MonthBalanceTableRow,
+  MonthBalanceOverrides
+} from '../types';
 
 export const INCOME_HEADS = [
   'Imam Fund',
@@ -120,6 +130,347 @@ export function computeMonthlySummary(transactions: Transaction[], openingBalanc
       balance: running,
     };
   });
+}
+
+export function getMonthLabel(mStr: string): string {
+  if (!mStr) return 'Current Month';
+  const [year, month] = mStr.split('-');
+  if (!year || !month) return mStr;
+  const date = new Date(parseInt(year, 10), parseInt(month, 10) - 1, 1);
+  return date.toLocaleString('default', { month: 'long', year: 'numeric' });
+}
+
+export function computeMonthBalanceTable(
+  transactions: Transaction[],
+  initialOpeningBalance: number,
+  overrides?: MonthBalanceOverrides
+): MonthBalanceTableRow[] {
+  // Collect all distinct months
+  const monthSet = new Set<string>();
+
+  transactions.forEach((t) => {
+    if (t.date && t.date.length >= 7) {
+      monthSet.add(t.date.slice(0, 7));
+    }
+    if (t.forMonth && t.forMonth.length >= 7) {
+      monthSet.add(t.forMonth.slice(0, 7));
+    }
+  });
+
+  if (overrides) {
+    Object.keys(overrides).forEach((m) => monthSet.add(m));
+  }
+
+  // Ensure current month is present
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  monthSet.add(currentMonth);
+
+  const sortedMonths = Array.from(monthSet).sort();
+
+  let runningOpening = num(initialOpeningBalance);
+  const rows: MonthBalanceTableRow[] = [];
+
+  for (const m of sortedMonths) {
+    const monthTxns = transactions.filter((t) => (t.date && t.date.slice(0, 7) === m));
+    const incomeTxns = monthTxns.filter((t) => t.type === 'Income');
+    const expTxns = monthTxns.filter((t) => t.type === 'Expenditure');
+
+    const income = incomeTxns.reduce((s, t) => s + num(t.amount), 0);
+    const expenditure = expTxns.reduce((s, t) => s + num(t.amount), 0);
+    const net = income - expenditure;
+    const autoBalance = runningOpening + net;
+
+    const conf = overrides?.[m];
+    const mode = conf?.mode || 'auto';
+    
+    let effectiveBalance = autoBalance;
+    if (mode === 'manual') {
+      if (conf?.manualBalance !== undefined) {
+        effectiveBalance = num(conf.manualBalance);
+      } else if (conf?.cashInHand !== undefined || conf?.bankBalance !== undefined) {
+        effectiveBalance = num(conf.cashInHand) + num(conf.bankBalance);
+      }
+    }
+
+    const variance = effectiveBalance - autoBalance;
+    const isReconciled = mode === 'auto' || Math.abs(variance) < 0.01;
+
+    rows.push({
+      month: m,
+      monthLabel: getMonthLabel(m),
+      openingBalance: runningOpening,
+      income,
+      incomeCount: incomeTxns.length,
+      expenditure,
+      expenditureCount: expTxns.length,
+      net,
+      autoBalance,
+      effectiveBalance,
+      mode,
+      cashInHand: conf?.cashInHand,
+      bankBalance: conf?.bankBalance,
+      variance,
+      isReconciled,
+      notes: conf?.notes,
+      verifiedBy: conf?.verifiedBy,
+      updatedAt: conf?.updatedAt,
+    });
+
+    // Carry forward effective closing balance as next month's opening
+    runningOpening = effectiveBalance;
+  }
+
+  return rows;
+}
+
+export interface WhatsAppReportParams {
+  monthRow: MonthBalanceTableRow;
+  transactions: Transaction[];
+  members: Member[];
+  settings: AppSettings;
+  style: 'standard' | 'itemized' | 'urdu' | 'english';
+  includeExpenses?: boolean;
+  includeIncome?: boolean;
+  includeMembers?: boolean;
+  customNote?: string;
+  signatoryName?: string;
+}
+
+export function buildWhatsAppMonthReport(params: WhatsAppReportParams): string {
+  const {
+    monthRow,
+    transactions,
+    members,
+    settings,
+    style,
+    includeExpenses = true,
+    includeIncome = true,
+    includeMembers = true,
+    customNote,
+    signatoryName,
+  } = params;
+
+  const org = settings.organizationName || 'Fallah Behbood Committee';
+  const sub = settings.subTitle || 'Pampore';
+  const mLabel = monthRow.monthLabel;
+
+  // Monthly transactions
+  const monthTxns = transactions.filter((t) => t.date && t.date.slice(0, 7) === monthRow.month);
+  const incomeTxns = monthTxns.filter((t) => t.type === 'Income');
+  const expTxns = monthTxns.filter((t) => t.type === 'Expenditure');
+
+  // Group Income by Head
+  const incomeByHead: Record<string, number> = {};
+  incomeTxns.forEach((t) => {
+    const h = t.head || 'Other';
+    incomeByHead[h] = (incomeByHead[h] || 0) + num(t.amount);
+  });
+
+  // Group Expenditure by Head
+  const expByHead: Record<string, number> = {};
+  expTxns.forEach((t) => {
+    const h = t.head || 'Other';
+    expByHead[h] = (expByHead[h] || 0) + num(t.amount);
+  });
+
+  // Member contribution stats
+  const contribs = calculateContributionsForMonth(members, transactions, monthRow.month);
+  const paidMembersCount = contribs.filter((c) => c.status === 'Paid').length;
+  const dueMembersCount = contribs.filter((c) => c.status !== 'Paid').length;
+
+  const sign = signatoryName || 'Management Committee';
+
+  // 1. URDU VERSION
+  if (style === 'urdu') {
+    let msg = `السلام علیکم ورحمۃ اللہ وبرکاتہ\n\n`;
+    msg += `🕌 *${org.toUpperCase()}* (${sub})\n`;
+    msg += `📋 *ماہانہ مالیاتی گوشوارہ / آمد و خرچ رپورٹ*\n`;
+    msg += `📅 *ماہ:* ${mLabel}\n`;
+    msg += `─────────────────────────\n`;
+    msg += `💰 *ابتدائی بقایا (Opening Balance):* ${formatMoney(monthRow.openingBalance)}\n`;
+    msg += `📥 *کل آمدنی و وصولی (Total Collections):* ${formatMoney(monthRow.income)} (${monthRow.incomeCount} اندراجات)\n`;
+    msg += `📤 *کل اخراجات (Total Payments):* ${formatMoney(monthRow.expenditure)} (${monthRow.expenditureCount} واؤچرز)\n`;
+    msg += `📈 *ماہانہ بچت / نیٹ (Monthly Net):* ${monthRow.net >= 0 ? '+' : ''}${formatMoney(monthRow.net)}\n`;
+    msg += `─────────────────────────\n`;
+    msg += `🏦 *ماہ کے اختتام پر کل بقایا (Closing Balance):* ${formatMoney(monthRow.effectiveBalance)}\n`;
+
+    if (monthRow.mode === 'manual') {
+      msg += `  • نقد دستی رقم (Cash in Hand): ${formatMoney(monthRow.cashInHand || 0)}\n`;
+      msg += `  • بینک اکاؤنٹ بقایا (Bank Balance): ${formatMoney(monthRow.bankBalance || 0)}\n`;
+      if (monthRow.notes) {
+        msg += `  • تفصیلی نوٹ: ${monthRow.notes}\n`;
+      }
+    }
+
+    if (includeIncome && Object.keys(incomeByHead).length > 0) {
+      msg += `\n📊 *آمدنی کی تفصیل (Income Breakdown):*\n`;
+      Object.entries(incomeByHead).forEach(([head, amt]) => {
+        msg += `  • ${head}: ${formatMoney(amt)}\n`;
+      });
+    }
+
+    if (includeExpenses && Object.keys(expByHead).length > 0) {
+      msg += `\n📑 *اخراجات کی تفصیل (Expenditures Breakdown):*\n`;
+      Object.entries(expByHead).forEach(([head, amt]) => {
+        msg += `  • ${head}: ${formatMoney(amt)}\n`;
+      });
+    }
+
+    if (includeMembers && members.length > 0) {
+      msg += `\n👥 *ممبران ماہانہ چندہ کی صورتحال:*\n`;
+      msg += `  • ادا شدہ ممبران: ${paidMembersCount}\n`;
+      msg += `  • واجب الادا / باقی ممبران: ${dueMembersCount}\n`;
+    }
+
+    if (customNote && customNote.trim()) {
+      msg += `\n📢 *خصوصی اعلان / نوٹس:*\n${customNote.trim()}\n`;
+    }
+
+    msg += `\n─────────────────────────\n`;
+    msg += `جزاکم اللہ خیراً و احسن الجزاء۔\n`;
+    msg += `✍️ *منجانب:* ${sign}\n`;
+    msg += `🗓️ بتاریخ: ${new Date().toLocaleDateString('en-GB')}`;
+
+    return msg;
+  }
+
+  // 2. ENGLISH VERSION
+  if (style === 'english') {
+    let msg = `*${org.toUpperCase()}*\n`;
+    msg += `_${sub}_\n\n`;
+    msg += `📊 *MONTHLY FINANCIAL STATEMENT — ${mLabel.toUpperCase()}*\n`;
+    msg += `==================================\n`;
+    msg += `💰 *Opening Balance:* ${formatMoney(monthRow.openingBalance)}\n`;
+    msg += `📥 *Total Collections:* ${formatMoney(monthRow.income)} (${monthRow.incomeCount} entries)\n`;
+    msg += `📤 *Total Expenditures:* ${formatMoney(monthRow.expenditure)} (${monthRow.expenditureCount} vouchers)\n`;
+    msg += `📈 *Net Monthly Movement:* ${monthRow.net >= 0 ? '+' : ''}${formatMoney(monthRow.net)}\n`;
+    msg += `----------------------------------\n`;
+    msg += `🏦 *Month-End Closing Balance:* ${formatMoney(monthRow.effectiveBalance)}\n`;
+
+    if (monthRow.mode === 'manual') {
+      msg += `  • Cash in Hand: ${formatMoney(monthRow.cashInHand || 0)}\n`;
+      msg += `  • Bank Balance: ${formatMoney(monthRow.bankBalance || 0)}\n`;
+      if (monthRow.notes) msg += `  • Note: ${monthRow.notes}\n`;
+    }
+
+    if (includeIncome && Object.keys(incomeByHead).length > 0) {
+      msg += `\n📥 *Income Breakdown:*\n`;
+      Object.entries(incomeByHead).forEach(([head, amt]) => {
+        msg += `  • ${head}: ${formatMoney(amt)}\n`;
+      });
+    }
+
+    if (includeExpenses && Object.keys(expByHead).length > 0) {
+      msg += `\n📤 *Expenses Breakdown:*\n`;
+      Object.entries(expByHead).forEach(([head, amt]) => {
+        msg += `  • ${head}: ${formatMoney(amt)}\n`;
+      });
+    }
+
+    if (includeMembers && members.length > 0) {
+      msg += `\n👥 *Member Subscriptions:* ${paidMembersCount} Paid / ${dueMembersCount} Pending\n`;
+    }
+
+    if (customNote && customNote.trim()) {
+      msg += `\n📌 *Important Note:* ${customNote.trim()}\n`;
+    }
+
+    msg += `==================================\n`;
+    msg += `Thank you for your continuous support.\n`;
+    msg += `— *${sign}*\n`;
+    msg += `Date: ${new Date().toLocaleDateString('en-GB')}`;
+
+    return msg;
+  }
+
+  // 3. ITEMIZED VERSION (Detailed line-by-line vouchers)
+  if (style === 'itemized') {
+    let msg = `السلام علیکم ورحمۃ اللہ وبرکاتہ\n\n`;
+    msg += `🕌 *${org.toUpperCase()}*\n`;
+    msg += `📑 *ITEMIZED MONTHLY FINANCIAL REPORT — ${mLabel.toUpperCase()}*\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `💰 *Opening Balance:* ${formatMoney(monthRow.openingBalance)}\n`;
+    msg += `📥 *Total Income:* ${formatMoney(monthRow.income)}\n`;
+    msg += `📤 *Total Expenditure:* ${formatMoney(monthRow.expenditure)}\n`;
+    msg += `📈 *Net Surplus/Deficit:* ${monthRow.net >= 0 ? '+' : ''}${formatMoney(monthRow.net)}\n`;
+    msg += `🏦 *Effective Month-End Closing:* ${formatMoney(monthRow.effectiveBalance)}\n`;
+    msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+
+    if (expTxns.length > 0) {
+      msg += `\n📋 *EXPENDITURE VOUCHERS LIST:*\n`;
+      expTxns.forEach((t, i) => {
+        msg += `${i + 1}. ${fmtDate(t.date)} | ${t.paidTo || t.head} | *${formatMoney(t.amount)}* ${t.remarks ? `(${t.remarks})` : ''}\n`;
+      });
+    }
+
+    if (incomeByHead && Object.keys(incomeByHead).length > 0) {
+      msg += `\n📥 *INCOME BY HEAD:*\n`;
+      Object.entries(incomeByHead).forEach(([head, amt]) => {
+        msg += `• ${head}: *${formatMoney(amt)}*\n`;
+      });
+    }
+
+    if (customNote && customNote.trim()) {
+      msg += `\n📢 *Note:* ${customNote.trim()}\n`;
+    }
+
+    msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+    msg += `✍️ *Issued by:* ${sign}\n`;
+    return msg;
+  }
+
+  // 4. STANDARD BILINGUAL (Default recommended)
+  let msg = `السلام علیکم ورحمۃ اللہ وبرکاتہ\n\n`;
+  msg += `🕌 *${org.toUpperCase()}*\n`;
+  msg += `📍 *${sub}*\n`;
+  msg += `📊 *ماہانہ مالیاتی رپورٹ / MONTHLY FINANCIAL REPORT*\n`;
+  msg += `🗓️ *ماہ / Month:* ${mLabel}\n`;
+  msg += `━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `💰 *ابتدائی بقایا (Opening Balance):* ${formatMoney(monthRow.openingBalance)}\n`;
+  msg += `📥 *کل آمدنی (Total Collections):* ${formatMoney(monthRow.income)}\n`;
+  msg += `📤 *کل اخراجات (Total Payments):* ${formatMoney(monthRow.expenditure)}\n`;
+  msg += `📈 *ماہانہ بچت (Monthly Net):* ${monthRow.net >= 0 ? '+' : ''}${formatMoney(monthRow.net)}\n`;
+  msg += `─────────────────────────\n`;
+  msg += `🏦 *ماہ کے اختتام پر کل رقم (Closing Balance):* *${formatMoney(monthRow.effectiveBalance)}*\n`;
+
+  if (monthRow.mode === 'manual') {
+    msg += `  ▫️ نقد کیش (Cash in Hand): ${formatMoney(monthRow.cashInHand || 0)}\n`;
+    msg += `  ▫️ بینک بقایا (Bank Account): ${formatMoney(monthRow.bankBalance || 0)}\n`;
+    if (monthRow.notes) {
+      msg += `  ▫️ تصدیقی نوٹ: ${monthRow.notes}\n`;
+    }
+  }
+
+  if (includeIncome && Object.keys(incomeByHead).length > 0) {
+    msg += `\n📥 *آمدنی کے اہم ذرائع (Income Heads):*\n`;
+    Object.entries(incomeByHead).forEach(([head, amt]) => {
+      msg += `  • ${head}: ${formatMoney(amt)}\n`;
+    });
+  }
+
+  if (includeExpenses && Object.keys(expByHead).length > 0) {
+    msg += `\n📤 *اخراجات کی تفصیل (Major Expenses):*\n`;
+    Object.entries(expByHead).forEach(([head, amt]) => {
+      msg += `  • ${head}: ${formatMoney(amt)}\n`;
+    });
+  }
+
+  if (includeMembers && members.length > 0) {
+    msg += `\n👥 *ممبران چندہ رپورٹ (Subscriptions):*\n`;
+    msg += `  • ادا شدہ ممبران (Cleared): ${paidMembersCount} ممبران\n`;
+    msg += `  • زیر التواء چندہ (Pending): ${dueMembersCount} ممبران\n`;
+  }
+
+  if (customNote && customNote.trim()) {
+    msg += `\n📢 *اہم اطلاع / Announcement:*\n${customNote.trim()}\n`;
+  }
+
+  msg += `\n━━━━━━━━━━━━━━━━━━━━━━━━━\n`;
+  msg += `تمام اراکین کے تعاون کا شکریہ۔ جزاکم اللہ خیراً۔\n`;
+  msg += `✍️ *منجانب انتظامیہ:* ${sign}\n`;
+  msg += `📅 *تاریخ اجراء:* ${new Date().toLocaleDateString('en-GB')}`;
+
+  return msg;
 }
 
 export function computeDailySummary(transactions: Transaction[], from?: string, to?: string): DailySummaryItem[] {
@@ -246,21 +597,32 @@ export function exportExcelWorkbook(
   const wsMembers = XLSX.utils.aoa_to_sheet(membersData);
   XLSX.utils.book_append_sheet(wb, wsMembers, 'Members Directory');
 
-  // 3. Monthly Statement Sheet
-  const monthlySummaries = computeMonthlySummary(transactions, settings.openingBalance);
+  // 3. Month Balances & Audit Sheet
+  const monthBalanceTable = computeMonthBalanceTable(transactions, settings.openingBalance, settings.monthBalances);
   const monthlyData = [
-    ['Month', 'Opening Balance (Rs.)', 'Income (Rs.)', 'Expenditure (Rs.)', 'Net Savings (Rs.)', 'Closing Balance (Rs.)'],
-    ...monthlySummaries.map(m => [
+    ['Month ID', 'Month Name', 'Opening Balance (Rs.)', 'Income (Rs.)', 'Income Count', 'Expenditure (Rs.)', 'Expenditure Count', 'Net Movement (Rs.)', 'Auto Calculated (Rs.)', 'Mode', 'Effective Closing (Rs.)', 'Cash in Hand (Rs.)', 'Bank Account (Rs.)', 'Variance (Rs.)', 'Reconciliation Status', 'Audited By', 'Notes'],
+    ...monthBalanceTable.map(m => [
       m.month,
-      m.balance - m.net,
+      m.monthLabel,
+      m.openingBalance,
       m.income,
+      m.incomeCount,
       m.expenditure,
+      m.expenditureCount,
       m.net,
-      m.balance,
+      m.autoBalance,
+      m.mode === 'manual' ? 'Manual Entry' : 'Automatic Update',
+      m.effectiveBalance,
+      m.cashInHand || '',
+      m.bankBalance || '',
+      m.variance,
+      m.isReconciled ? 'Reconciled' : 'Discrepancy',
+      m.verifiedBy || '',
+      m.notes || '',
     ]),
   ];
   const wsMonthly = XLSX.utils.aoa_to_sheet(monthlyData);
-  XLSX.utils.book_append_sheet(wb, wsMonthly, 'Monthly Summary');
+  XLSX.utils.book_append_sheet(wb, wsMonthly, 'Month Balances & Audit');
 
   // Write file
   XLSX.writeFile(wb, filename);

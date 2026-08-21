@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react';
-import { Transaction, Member, AppSettings, StorageStatus } from './types';
+import { Transaction, Member, AppSettings, StorageStatus, MonthBalanceConfig } from './types';
 import { Header } from './components/Header';
 import { LedgerTab } from './components/LedgerTab';
 import { MembersTab } from './components/MembersTab';
@@ -258,6 +258,17 @@ export default function App() {
     if (data.settings) setSettings(data.settings);
   };
 
+  const handleUpdateMonthBalanceConfig = (month: string, config: MonthBalanceConfig) => {
+    setSettings((prev) => {
+      const updated = { ...(prev.monthBalances || {}) };
+      updated[month] = config;
+      return {
+        ...prev,
+        monthBalances: updated,
+      };
+    });
+  };
+
   return (
     <div className="min-h-screen bg-slate-100 text-slate-900 font-sans p-3 sm:p-6 md:p-8">
       <div className="max-w-7xl mx-auto space-y-6">
@@ -364,6 +375,7 @@ export default function App() {
               transactions={transactions}
               members={members}
               settings={settings}
+              onUpdateMonthBalanceConfig={handleUpdateMonthBalanceConfig}
               showToast={showToast}
             />
           )}

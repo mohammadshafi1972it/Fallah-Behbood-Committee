@@ -26,6 +26,39 @@ export interface Member {
   address?: string;
 }
 
+export interface MonthBalanceConfig {
+  mode: 'auto' | 'manual';
+  manualBalance?: number;
+  cashInHand?: number;
+  bankBalance?: number;
+  notes?: string;
+  verifiedBy?: string;
+  updatedAt?: string;
+}
+
+export type MonthBalanceOverrides = Record<string, MonthBalanceConfig>;
+
+export interface MonthBalanceTableRow {
+  month: string; // YYYY-MM
+  monthLabel: string;
+  openingBalance: number;
+  income: number;
+  incomeCount: number;
+  expenditure: number;
+  expenditureCount: number;
+  net: number;
+  autoBalance: number;
+  effectiveBalance: number;
+  mode: 'auto' | 'manual';
+  cashInHand?: number;
+  bankBalance?: number;
+  variance: number;
+  isReconciled: boolean;
+  notes?: string;
+  verifiedBy?: string;
+  updatedAt?: string;
+}
+
 export interface AppSettings {
   openingBalance: number;
   organizationName: string;
@@ -36,6 +69,7 @@ export interface AppSettings {
   linkedGoogleSheetId?: string;
   linkedGoogleSheetName?: string;
   lastSyncedAt?: string;
+  monthBalances?: MonthBalanceOverrides;
 }
 
 export interface StorageStatus {
