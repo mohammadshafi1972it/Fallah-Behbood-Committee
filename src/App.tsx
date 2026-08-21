@@ -202,6 +202,44 @@ export default function App() {
     setMembers((prev) => [...prev, member]);
   };
 
+  const handleUpdateMember = (updatedMember: Member) => {
+    setMembers((prev) => {
+      const idx = prev.findIndex((m) => m.ledgerNo === updatedMember.ledgerNo);
+      if (idx > -1) {
+        const copy = [...prev];
+        copy[idx] = { ...copy[idx], ...updatedMember, updatedAt: new Date().toISOString() };
+        return copy;
+      }
+      return [...prev, updatedMember];
+    });
+  };
+
+  const handleUpdateMemberBalance = (ledgerNo: string, openingBalance: number, notes?: string) => {
+    setMembers((prev) => {
+      const idx = prev.findIndex((m) => m.ledgerNo === ledgerNo);
+      if (idx > -1) {
+        const copy = [...prev];
+        copy[idx] = {
+          ...copy[idx],
+          openingBalance,
+          balanceNotes: notes,
+          updatedAt: new Date().toISOString(),
+        };
+        return copy;
+      }
+      return prev;
+    });
+
+    // Also update settings.memberBalanceOverrides
+    setSettings((prev) => ({
+      ...prev,
+      memberBalanceOverrides: {
+        ...(prev.memberBalanceOverrides || {}),
+        [ledgerNo]: { openingBalance, notes },
+      },
+    }));
+  };
+
   const handleRemoveMember = (ledgerNo: string) => {
     const target = members.find((m) => m.ledgerNo === ledgerNo);
     const label = target ? target.name : `Ledger No. ${ledgerNo}`;
@@ -350,8 +388,11 @@ export default function App() {
             <MembersTab
               members={members}
               transactions={transactions}
+              settings={settings}
               organizationName={settings.organizationName}
               onAddMember={handleAddMember}
+              onUpdateMember={handleUpdateMember}
+              onUpdateMemberBalance={handleUpdateMemberBalance}
               onRemoveMember={handleRemoveMember}
               onBulkImportMembers={handleBulkImportMembers}
               onSaveTransaction={handleSaveTransaction}
@@ -376,6 +417,7 @@ export default function App() {
               members={members}
               settings={settings}
               onUpdateMonthBalanceConfig={handleUpdateMonthBalanceConfig}
+              onUpdateMemberBalance={handleUpdateMemberBalance}
               showToast={showToast}
             />
           )}

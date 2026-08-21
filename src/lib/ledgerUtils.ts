@@ -8,7 +8,8 @@ import {
   MemberTotals, 
   ContributionItem,
   MonthBalanceTableRow,
-  MonthBalanceOverrides
+  MonthBalanceOverrides,
+  MemberBalanceItem
 } from '../types';
 
 export const INCOME_HEADS = [
@@ -100,6 +101,390 @@ export function calculateMemberTotals(transactions: Transaction[], ledgerNo: str
   const totalPaid = list.reduce((s, t) => s + num(t.amount), 0);
   const lastPaymentDate = list.reduce((l, t) => (!l || t.date > l ? t.date : l), '');
   return { totalPaid, count: list.length, lastPaymentDate };
+}
+
+/**
+ * Computes live member balances incorporating manual opening/baseline balances
+ * and dynamic real-time updates as payments are recorded in the ledger.
+ */
+export function computeMemberBalanceList(
+  members: Member[],
+  transactions: Transaction[],
+  memberBalanceOverrides?: Record<string, { openingBalance?: number; notes?: string }>
+): MemberBalanceItem[] {
+  // Pre-filter Income transactions
+  const incomeTxns = transactions.filter(t => t.type === 'Income');
+
+  return members.map((m) => {
+    const lNo = String(m.ledgerNo || '').trim();
+    const memberTxns = incomeTxns.filter((t) => String(t.ledgerNo || '').trim() === lNo);
+
+    // Manual opening balance (if set on member object or via overrides)
+    const override = memberBalanceOverrides ? memberBalanceOverrides[lNo] : undefined;
+    const openingBalance = num(m.openingBalance !== undefined ? m.openingBalance : override?.openingBalance || 0);
+
+    // Sum all income transactions credited to this member
+    const totalPaid = memberTxns.reduce((sum, t) => sum + num(t.amount), 0);
+
+    // Differentiate subscription vs other heads
+    const subscriptionPaid = memberTxns
+      .filter((t) => (t.head || '').toLowerCase().includes('subscription'))
+      .reduce((sum, t) => sum + num(t.amount), 0);
+    const otherPaid = totalPaid - subscriptionPaid;
+
+    // Find latest payment date
+    let lastPaymentDate: string | null = null;
+    if (memberTxns.length > 0) {
+      const sorted = memberTxns.slice().sort((a, b) => b.date.localeCompare(a.date));
+      lastPaymentDate = sorted[0].date;
+    }
+
+    // Effective live balance = (Manual Opening Balance) + (Total Paid to Date)
+    const effectiveBalance = openingBalance + totalPaid;
+
+    // Balance status classification
+    let status: 'Advance' | 'Cleared' | 'Arrears' | 'Active' = 'Active';
+    if (effectiveBalance > 0) {
+      status = 'Advance';
+    } else if (effectiveBalance === 0 && totalPaid > 0) {
+      status = 'Cleared';
+    } else if (effectiveBalance < 0) {
+      status = 'Arrears';
+    } else if (totalPaid > 0) {
+      status = 'Active';
+    }
+
+    return {
+      member: m,
+      ledgerNo: m.ledgerNo,
+      name: m.name,
+      monthlyDue: num(m.monthlyDue) || 150,
+      phone: m.phone || '',
+      address: m.address || '',
+      openingBalance,
+      totalPaid,
+      subscriptionPaid,
+      otherPaid,
+      receiptsCount: memberTxns.length,
+      lastPaymentDate,
+      effectiveBalance,
+      status,
+      balanceNotes: m.balanceNotes || override?.notes || '',
+    };
+  });
+}
+
+/**
+ * Print & Export High-Fidelity All Members Balance PDF Statement
+ */
+export function printAllMembersBalancePDF(
+  memberBalances: MemberBalanceItem[],
+  organizationName: string,
+  options?: {
+    orientation?: 'portrait' | 'landscape';
+    sessionTag?: string;
+    subTitle?: string;
+    filterLabel?: string;
+  }
+): void {
+  if (!memberBalances || memberBalances.length === 0) return;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+
+  const orientation = options?.orientation || 'portrait';
+  const sessionTag = options?.sessionTag || 'Session 2026–27';
+  const subTitle = options?.subTitle || 'Income & Expenditure Ledger — Pampore';
+  const filterLabel = options?.filterLabel || 'All Registered Members';
+
+  // Compute Grand Summary
+  let grandOpening = 0;
+  let grandPaid = 0;
+  let grandSubscription = 0;
+  let grandOther = 0;
+  let grandEffective = 0;
+  let grandReceipts = 0;
+  let activePayers = 0;
+
+  memberBalances.forEach((item) => {
+    grandOpening += item.openingBalance;
+    grandPaid += item.totalPaid;
+    grandSubscription += item.subscriptionPaid;
+    grandOther += item.otherPaid;
+    grandEffective += item.effectiveBalance;
+    grandReceipts += item.receiptsCount;
+    if (item.totalPaid > 0) activePayers++;
+  });
+
+  const rowsHtml = memberBalances
+    .map((item, idx) => {
+      const isPositive = item.effectiveBalance > 0;
+      const isNegative = item.effectiveBalance < 0;
+      const statusBadge =
+        item.status === 'Advance'
+          ? '<span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Advance</span>'
+          : item.status === 'Arrears'
+          ? '<span style="background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Arrears Due</span>'
+          : item.status === 'Cleared'
+          ? '<span style="background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Cleared</span>'
+          : '<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Active</span>';
+
+      return `
+        <tr>
+          <td style="text-align:center; color:#64748b; font-size:8.5pt;">${idx + 1}</td>
+          <td style="font-weight:bold; font-family:monospace; color:#0f172a;">#${item.ledgerNo}</td>
+          <td style="font-weight:600; color:#0f172a;">
+            ${item.name}
+            ${item.phone ? `<div style="font-size:7.5pt; color:#64748b; font-weight:normal;">📱 ${item.phone}</div>` : ''}
+          </td>
+          <td style="text-align:right; font-family:monospace; color:#475569;">${formatMoney(item.monthlyDue)}</td>
+          <td style="text-align:right; font-family:monospace; color:${item.openingBalance >= 0 ? '#047857' : '#b91c1c'}; font-weight:500;">
+            ${item.openingBalance !== 0 ? formatMoney(item.openingBalance) : '—'}
+          </td>
+          <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
+            ${formatMoney(item.totalPaid)}
+          </td>
+          <td style="text-align:center; font-family:monospace; font-size:8.5pt; color:#475569;">
+            ${item.receiptsCount > 0 ? `${item.receiptsCount} entries` : '—'}
+          </td>
+          <td style="font-size:8pt; color:#64748b; white-space:nowrap;">
+            ${item.lastPaymentDate ? fmtDate(item.lastPaymentDate) : 'No payment'}
+          </td>
+          <td style="text-align:right; font-family:monospace; font-weight:bold; font-size:9.5pt; color:${
+            isPositive ? '#065f46' : isNegative ? '#b91c1c' : '#334155'
+          }; background:${isPositive ? '#f0fdf4' : isNegative ? '#fef2f2' : 'transparent'};">
+            ${formatMoney(item.effectiveBalance)}
+          </td>
+          <td style="text-align:center;">${statusBadge}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <title>All Members Balance Statement — ${organizationName}</title>
+      <style>
+        @page { size: A4 ${orientation}; margin: 10mm; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; margin: 0; padding: 10px; font-size: 9pt; line-height: 1.4; }
+        .header { text-align: center; border-bottom: 2px solid #b8863b; padding-bottom: 8px; margin-bottom: 12px; }
+        .header h1 { font-size: 16pt; margin: 0; color: #1F3A5F; font-family: Georgia, serif; text-transform: uppercase; letter-spacing: 0.5px; }
+        .header p { margin: 2px 0 0; font-size: 9.5pt; color: #475569; }
+        .header .meta { margin-top: 4px; font-size: 8.5pt; font-weight: bold; color: #b8863b; letter-spacing: 0.3px; }
+        
+        .kpi-container { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 12px; background: #f8fafc; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px; }
+        .kpi-box { flex: 1; text-align: center; }
+        .kpi-box .val { font-size: 11pt; font-weight: bold; color: #0f172a; margin-top: 2px; font-family: monospace; }
+        .kpi-box .lbl { font-size: 7.5pt; text-transform: uppercase; color: #64748b; font-weight: 600; }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-top: 5px; }
+        th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; }
+        th { background-color: #1e293b; color: #ffffff; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.5px; }
+        tr:nth-child(even) { background-color: #f8fafc; }
+        .total-row { background-color: #fef3c7 !important; font-weight: bold; font-size: 9pt; border-top: 2px solid #b8863b; }
+        
+        .audit-box { margin-top: 20px; display: flex; justify-content: space-between; gap: 20px; padding-top: 15px; border-top: 1px solid #cbd5e1; font-size: 8.5pt; }
+        .sig-col { text-align: center; flex: 1; }
+        .sig-line { border-top: 1px dashed #64748b; margin-top: 35px; padding-top: 4px; font-weight: 600; color: #334155; }
+        .sig-role { font-size: 7.5pt; color: #64748b; }
+        
+        .footer { margin-top: 15px; display: flex; justify-content: space-between; font-size: 7.5pt; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 4px; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>${organizationName || 'Fallah Behbood Committee'}</h1>
+        <p>${subTitle} • Pampore, Kashmir</p>
+        <div class="meta">ALL MEMBERS BALANCE & FINANCIAL AUDIT STATEMENT (${sessionTag})</div>
+      </div>
+
+      <div class="kpi-container">
+        <div class="kpi-box">
+          <div class="lbl">Total Members</div>
+          <div class="val">${memberBalances.length}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Active Payers</div>
+          <div class="val" style="color:#0284c7;">${activePayers} / ${memberBalances.length}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Manual Opening Balances</div>
+          <div class="val" style="color:${grandOpening >= 0 ? '#047857' : '#b91c1c'};">${formatMoney(grandOpening)}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Total Collections Paid</div>
+          <div class="val" style="color:#047857;">${formatMoney(grandPaid)}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Effective Live Balance</div>
+          <div class="val" style="color:#0f172a; font-size:12pt;">${formatMoney(grandEffective)}</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:25px; text-align:center;">#</th>
+            <th style="width:65px;">Ledger #</th>
+            <th>Member Name</th>
+            <th style="text-align:right; width:70px;">Monthly Rate</th>
+            <th style="text-align:right; width:85px;">Opening Bal. (Manual)</th>
+            <th style="text-align:right; width:85px;">Total Paid (Auto)</th>
+            <th style="text-align:center; width:60px;">Receipts</th>
+            <th style="width:75px;">Last Paid</th>
+            <th style="text-align:right; width:95px;">Effective Balance</th>
+            <th style="text-align:center; width:65px;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+          <tr class="total-row">
+            <td colspan="3" style="text-align:right; font-weight:bold; text-transform:uppercase;">
+              GRAND TOTAL (${memberBalances.length} MEMBERS):
+            </td>
+            <td style="text-align:right; font-family:monospace;">—</td>
+            <td style="text-align:right; font-family:monospace; color:${grandOpening >= 0 ? '#047857' : '#b91c1c'};">
+              ${formatMoney(grandOpening)}
+            </td>
+            <td style="text-align:right; font-family:monospace; color:#065f46; font-size:9.5pt;">
+              ${formatMoney(grandPaid)}
+            </td>
+            <td style="text-align:center; font-family:monospace;">${grandReceipts}</td>
+            <td style="color:#64748b;">—</td>
+            <td style="text-align:right; font-family:monospace; font-size:10pt; color:#0f172a;">
+              ${formatMoney(grandEffective)}
+            </td>
+            <td style="text-align:center; font-size:8pt;">AUDITED</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="audit-box">
+        <div class="sig-col">
+          <div class="sig-line">Prepared By / Accountant</div>
+          <div class="sig-role">Fallah Behbood Committee</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">Treasurer / Cashier</div>
+          <div class="sig-role">Verified Physical & Ledger Count</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">Audited By / General Secretary</div>
+          <div class="sig-role">Internal Audit Committee</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">President / Chairman</div>
+          <div class="sig-role">Approved & Sealed</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Filter: ${filterLabel} • Report generated for ${organizationName}</div>
+        <div>Statement Date: ${fmtDate(todayISO())} • Printed on: ${new Date().toLocaleString()}</div>
+      </div>
+
+      <script>
+        window.onload = function() { window.print(); }
+      </script>
+    </body>
+    </html>
+  `;
+
+  printWindow.document.write(html);
+  printWindow.document.close();
+}
+
+/**
+ * Export All Members Balance Spreadsheet to Excel (.xlsx)
+ */
+export function exportAllMembersBalanceExcel(
+  memberBalances: MemberBalanceItem[],
+  organizationName: string
+): void {
+  if (!memberBalances || memberBalances.length === 0) return;
+
+  const wb = XLSX.utils.book_new();
+
+  const data = [
+    [
+      'S.No',
+      'Ledger No.',
+      'Member Name',
+      'Phone Number',
+      'Address',
+      'Monthly Subscription (Rs.)',
+      'Manual Opening Balance (Rs.)',
+      'Total Paid to Date (Rs.)',
+      'Subscription Paid (Rs.)',
+      'Other Funds / Donations (Rs.)',
+      'Receipts Count',
+      'Last Payment Date',
+      'Effective Live Balance (Rs.)',
+      'Balance Status',
+      'Balance Notes / Remarks',
+    ],
+    ...memberBalances.map((m, idx) => [
+      idx + 1,
+      m.ledgerNo,
+      m.name,
+      m.phone || '',
+      m.address || '',
+      m.monthlyDue,
+      m.openingBalance,
+      m.totalPaid,
+      m.subscriptionPaid,
+      m.otherPaid,
+      m.receiptsCount,
+      m.lastPaymentDate ? fmtDate(m.lastPaymentDate) : '—',
+      m.effectiveBalance,
+      m.status,
+      m.balanceNotes || '',
+    ]),
+  ];
+
+  // Add Grand Total row
+  let grandOpening = 0;
+  let grandPaid = 0;
+  let grandSub = 0;
+  let grandOther = 0;
+  let grandEffective = 0;
+  let grandCount = 0;
+
+  memberBalances.forEach((m) => {
+    grandOpening += m.openingBalance;
+    grandPaid += m.totalPaid;
+    grandSub += m.subscriptionPaid;
+    grandOther += m.otherPaid;
+    grandEffective += m.effectiveBalance;
+    grandCount += m.receiptsCount;
+  });
+
+  data.push([
+    'TOTAL',
+    '—',
+    `Grand Total (${memberBalances.length} Members)`,
+    '—',
+    '—',
+    '—',
+    grandOpening,
+    grandPaid,
+    grandSub,
+    grandOther,
+    grandCount,
+    '—',
+    grandEffective,
+    'Audited',
+    'Consolidated Member Statement',
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws, 'Member Balances Ledger');
+
+  const filename = `All_Members_Balance_Report_${organizationName.replace(/\s+/g, '_')}_${todayISO()}.xlsx`;
+  XLSX.writeFile(wb, filename);
 }
 
 export function computeMonthlySummary(transactions: Transaction[], openingBalance: number): MonthlySummaryItem[] {
@@ -580,22 +965,26 @@ export function exportExcelWorkbook(
   XLSX.utils.book_append_sheet(wb, wsLedger, 'Ledger Entries');
 
   // 2. Members Directory Sheet
+  const memberBalances = computeMemberBalanceList(members, transactions, settings.memberBalanceOverrides);
   const membersData = [
-    ['Ledger No.', 'Member Name', 'Monthly Due (Rs.)', 'Total Paid (Rs.)', 'Total Entries', 'Last Payment Date'],
-    ...members.map(m => {
-      const totals = calculateMemberTotals(transactions, m.ledgerNo);
-      return [
-        m.ledgerNo,
-        m.name,
-        m.monthlyDue,
-        totals.totalPaid,
-        totals.count,
-        totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : '—',
-      ];
-    }),
+    ['Ledger No.', 'Member Name', 'Phone', 'Monthly Due (Rs.)', 'Manual Opening Balance (Rs.)', 'Total Paid (Rs.)', 'Subscription (Rs.)', 'Other Funds (Rs.)', 'Payment Receipts', 'Last Payment Date', 'Effective Live Balance (Rs.)', 'Status'],
+    ...memberBalances.map(m => [
+      m.ledgerNo,
+      m.name,
+      m.phone || '',
+      m.monthlyDue,
+      m.openingBalance,
+      m.totalPaid,
+      m.subscriptionPaid,
+      m.otherPaid,
+      m.receiptsCount,
+      m.lastPaymentDate ? fmtDate(m.lastPaymentDate) : '—',
+      m.effectiveBalance,
+      m.status,
+    ]),
   ];
   const wsMembers = XLSX.utils.aoa_to_sheet(membersData);
-  XLSX.utils.book_append_sheet(wb, wsMembers, 'Members Directory');
+  XLSX.utils.book_append_sheet(wb, wsMembers, 'Member Balances & Directory');
 
   // 3. Month Balances & Audit Sheet
   const monthBalanceTable = computeMonthBalanceTable(transactions, settings.openingBalance, settings.monthBalances);

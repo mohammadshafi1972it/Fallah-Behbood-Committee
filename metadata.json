@@ -1,6 +1,6 @@
 {
   "name": "Fallah Behbood Committee Ledger",
-  "description": "Income & Expenditure ledger management app for Fallah Behbood Committee Pampore with Month Balance tracking, manual/automatic reconciliation, WhatsApp report generation, Google Drive, and Excel support.",
+  "description": "Income & Expenditure ledger app for Fallah Behbood Committee Pampore with Month End balance tracking, member-wise manual & auto-updating balances, WhatsApp report sharing, and all-members PDF statement generation.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

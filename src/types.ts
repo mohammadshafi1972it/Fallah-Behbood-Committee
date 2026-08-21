@@ -24,6 +24,27 @@ export interface Member {
   monthlyDue: number;
   phone?: string;
   address?: string;
+  openingBalance?: number; // Manual initial balance: positive = Advance/Credit, negative = Starting Arrears/Due
+  balanceNotes?: string;
+  updatedAt?: string;
+}
+
+export interface MemberBalanceItem {
+  member: Member;
+  ledgerNo: string;
+  name: string;
+  monthlyDue: number;
+  phone?: string;
+  address?: string;
+  openingBalance: number; // Manual starting balance
+  totalPaid: number; // Sum of all income payments recorded (automatically updated in real-time)
+  subscriptionPaid: number; // Specific to subscription
+  otherPaid: number; // Other funds/donations
+  receiptsCount: number; // Number of payments made
+  lastPaymentDate: string | null;
+  effectiveBalance: number; // openingBalance + totalPaid
+  status: 'Advance' | 'Cleared' | 'Arrears' | 'Active';
+  balanceNotes?: string;
 }
 
 export interface MonthBalanceConfig {
@@ -70,6 +91,7 @@ export interface AppSettings {
   linkedGoogleSheetName?: string;
   lastSyncedAt?: string;
   monthBalances?: MonthBalanceOverrides;
+  memberBalanceOverrides?: Record<string, { openingBalance?: number; notes?: string }>;
 }
 
 export interface StorageStatus {

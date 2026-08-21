@@ -1,17 +1,62 @@
 import React, { useState, useMemo } from 'react';
-import { Member, Transaction, ContributionItem } from '../types';
-import { calculateMemberTotals, formatMoney, num, normalizeName, exportCsv, fmtDate, INCOME_HEADS, calculateContributionsForMonth, findMember, parseUniversalFileImport } from '../lib/ledgerUtils';
+import { Member, Transaction, ContributionItem, AppSettings, MemberBalanceItem } from '../types';
+import {
+  calculateMemberTotals,
+  formatMoney,
+  num,
+  normalizeName,
+  exportCsv,
+  fmtDate,
+  INCOME_HEADS,
+  calculateContributionsForMonth,
+  findMember,
+  parseUniversalFileImport,
+  computeMemberBalanceList,
+  printAllMembersBalancePDF,
+  exportAllMembersBalanceExcel,
+} from '../lib/ledgerUtils';
 import { MemberHistoryModal } from './MemberHistoryModal';
 import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 import { MemberCollapsibleHistory } from './MemberCollapsibleHistory';
+import { EditMemberBalanceModal } from './EditMemberBalanceModal';
+import { AllMembersBalancePdfModal } from './AllMembersBalancePdfModal';
 import * as XLSX from 'xlsx';
-import { Users, UserPlus, Upload, Search, Download, Printer, History, Trash2, RefreshCw, CheckCircle2, AlertCircle, Bell, Filter, ChevronDown, ChevronUp, DollarSign, ArrowUpDown, Award, TrendingUp, BarChart3, PieChart, FileSpreadsheet } from 'lucide-react';
+import {
+  Users,
+  UserPlus,
+  Upload,
+  Search,
+  Download,
+  Printer,
+  History,
+  Trash2,
+  RefreshCw,
+  CheckCircle2,
+  AlertCircle,
+  Bell,
+  Filter,
+  ChevronDown,
+  ChevronUp,
+  DollarSign,
+  ArrowUpDown,
+  Award,
+  TrendingUp,
+  BarChart3,
+  PieChart,
+  FileSpreadsheet,
+  Pencil,
+  FileText,
+  ShieldCheck,
+} from 'lucide-react';
 
 interface MembersTabProps {
   members: Member[];
   transactions: Transaction[];
   organizationName: string;
+  settings?: AppSettings;
   onAddMember: (member: Member) => void;
+  onUpdateMember?: (member: Member) => void;
+  onUpdateMemberBalance?: (ledgerNo: string, openingBalance: number, notes?: string) => void;
   onRemoveMember: (ledgerNo: string) => void;
   onBulkImportMembers: (newMembers: Member[]) => void;
   onSaveTransaction?: (txn: Transaction) => void;
@@ -23,7 +68,10 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   members,
   transactions,
   organizationName,
+  settings,
   onAddMember,
+  onUpdateMember,
+  onUpdateMemberBalance,
   onRemoveMember,
   onBulkImportMembers,
   onSaveTransaction,
@@ -33,6 +81,8 @@ export const MembersTab: React.FC<MembersTabProps> = ({
   const [ledgerNo, setLedgerNo] = useState<string>('');
   const [name, setName] = useState<string>('');
   const [monthlyDue, setMonthlyDue] = useState<string>('150');
+  const [initialOpeningBalance, setInitialOpeningBalance] = useState<string>('0');
+  const [phone, setPhone] = useState<string>('');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [statusFilter, setStatusFilter] = useState<'All' | 'Paid' | 'Partial' | 'Due'>('All');
 
@@ -41,6 +91,13 @@ export const MembersTab: React.FC<MembersTabProps> = ({
 
   // History modal state
   const [selectedHistoryMember, setSelectedHistoryMember] = useState<Member | null>(null);
+
+  // Edit Member Balance modal state
+  const [isEditBalanceModalOpen, setIsEditBalanceModalOpen] = useState(false);
+  const [selectedBalanceMember, setSelectedBalanceMember] = useState<Member | null>(null);
+
+  // All Members Balance PDF statement modal state
+  const [isAllMembersBalancePdfModalOpen, setIsAllMembersBalancePdfModalOpen] = useState(false);
 
   // Collapsible inline history state
   const [expandedLedgers, setExpandedLedgers] = useState<Record<string, boolean>>({});
@@ -163,6 +220,17 @@ export const MembersTab: React.FC<MembersTabProps> = ({
       topContributor,
     };
   }, [memberwisePaymentData]);
+
+  // Compute live member balances (Manual Opening Balance + Auto-updated Live Payments)
+  const memberBalanceList = useMemo(() => {
+    return computeMemberBalanceList(members, transactions, settings?.memberBalanceOverrides);
+  }, [members, transactions, settings?.memberBalanceOverrides]);
+
+  const memberBalanceMap = useMemo(() => {
+    const map = new Map<string, MemberBalanceItem>();
+    memberBalanceList.forEach((b) => map.set(b.ledgerNo, b));
+    return map;
+  }, [memberBalanceList]);
 
   // Export Memberwise Total Payments CSV
   const handleExportMemberwiseTotalsCSV = () => {
@@ -352,16 +420,26 @@ export const MembersTab: React.FC<MembersTabProps> = ({
       return;
     }
 
+    const parsedInitialBalance = num(initialOpeningBalance) || 0;
+
     onAddMember({
       ledgerNo: cleanLNo,
       name: cleanName,
       monthlyDue: parsedDue,
+      openingBalance: parsedInitialBalance,
+      phone: phone.trim() || undefined,
     });
+
+    if (parsedInitialBalance !== 0 && onUpdateMemberBalance) {
+      onUpdateMemberBalance(cleanLNo, parsedInitialBalance, 'Initial balance on registration');
+    }
 
     showToast('New member added successfully.');
     setLedgerNo('');
     setName('');
     setMonthlyDue('150');
+    setInitialOpeningBalance('0');
+    setPhone('');
   };
 
   // Bulk import members from Excel / CSV / JSON
@@ -590,7 +668,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           <span>Add New Member</span>
         </h3>
 
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
           <div>
             <label className="block text-xs font-semibold text-slate-600 mb-1">Ledger No.</label>
             <div className="flex gap-1.5">
@@ -626,7 +704,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           </div>
 
           <div>
-            <label className="block text-xs font-semibold text-slate-600 mb-1">Monthly Subscription Due (Rs.)</label>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">Monthly Due (Rs.)</label>
             <input
               type="number"
               placeholder="150"
@@ -634,6 +712,30 @@ export const MembersTab: React.FC<MembersTabProps> = ({
               onChange={(e) => setMonthlyDue(e.target.value)}
               className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-slate-50/50"
               required
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1 flex items-center justify-between">
+              <span>Manual Opening Bal. (Rs.)</span>
+            </label>
+            <input
+              type="number"
+              placeholder="0 (or negative for arrears)"
+              value={initialOpeningBalance}
+              onChange={(e) => setInitialOpeningBalance(e.target.value)}
+              className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-slate-50/50"
+            />
+          </div>
+
+          <div>
+            <label className="block text-xs font-semibold text-slate-600 mb-1">WhatsApp / Phone</label>
+            <input
+              type="tel"
+              placeholder="e.g. 9419000000"
+              value={phone}
+              onChange={(e) => setPhone(e.target.value)}
+              className="w-full text-xs font-mono px-3 py-2 border border-slate-200 rounded-lg focus:outline-none focus:border-slate-800 bg-slate-50/50"
             />
           </div>
         </div>
@@ -816,11 +918,20 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             </div>
 
             <button
+              onClick={() => setIsAllMembersBalancePdfModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer shadow-xs"
+              title="View full balance statement of all members & print PDF"
+            >
+              <FileText className="w-3.5 h-3.5 text-emerald-200" />
+              <span>All Members Balance (PDF)</span>
+            </button>
+
+            <button
               onClick={handlePrintAllMembers}
-              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
             >
               <Printer className="w-3.5 h-3.5" />
-              <span>Download PDF</span>
+              <span>Directory PDF</span>
             </button>
           </div>
         </div>
@@ -837,26 +948,31 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           <table className="w-full text-left text-xs">
             <thead className="bg-slate-800 text-white font-serif uppercase tracking-wider text-[11px]">
               <tr>
-                <th className="py-3 px-4">Ledger No</th>
-                <th className="py-3 px-4">Member Name</th>
-                <th className="py-3 px-4">Monthly Due</th>
-                <th className="py-3 px-4">Payment Status</th>
-                <th className="py-3 px-4">Total Paid</th>
-                <th className="py-3 px-4">Entries</th>
-                <th className="py-3 px-4">Last Payment</th>
-                <th className="py-3 px-4 text-right">Actions</th>
+                <th className="py-3 px-3">Ledger No</th>
+                <th className="py-3 px-3">Member Name</th>
+                <th className="py-3 px-3">Monthly Due</th>
+                <th className="py-3 px-3">Payment Status</th>
+                <th className="py-3 px-3">Manual Opening Bal.</th>
+                <th className="py-3 px-3">Paid to Date (Auto)</th>
+                <th className="py-3 px-3 font-bold text-amber-300">Live Balance</th>
+                <th className="py-3 px-3">Entries</th>
+                <th className="py-3 px-3">Last Payment</th>
+                <th className="py-3 px-3 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-mono">
               {filteredMembers.length === 0 ? (
                 <tr>
-                  <td colSpan={8} className="py-12 text-center text-slate-400 font-sans">
+                  <td colSpan={10} className="py-12 text-center text-slate-400 font-sans">
                     No members found. Import or add members above.
                   </td>
                 </tr>
               ) : (
                 filteredMembers.map((m) => {
                   const totals = calculateMemberTotals(transactions, m.ledgerNo);
+                  const balItem = memberBalanceMap.get(m.ledgerNo);
+                  const openingBal = balItem ? balItem.openingBalance : (m.openingBalance || 0);
+                  const liveEffectiveBal = balItem ? balItem.effectiveBalance : (openingBal + totals.totalPaid);
                   const overdueItem = overdueMembersList.find((o) => o.ledgerNo === m.ledgerNo);
                   const contrib = currentMonthContributionsMap.get(String(m.ledgerNo).trim());
                   const st = contrib?.status || 'Due';
@@ -865,7 +981,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                   return (
                     <React.Fragment key={m.ledgerNo}>
                       <tr className={`hover:bg-amber-50/40 transition-colors ${isExpanded ? 'bg-amber-50/60 border-l-4 border-l-amber-500' : ''}`}>
-                        <td className="py-3 px-4 font-bold text-slate-900">
+                        <td className="py-3 px-3 font-bold text-slate-900">
                           <button
                             onClick={() => toggleExpandMember(m.ledgerNo)}
                             className="inline-flex items-center gap-1.5 hover:text-amber-700 cursor-pointer font-bold focus:outline-none"
@@ -879,7 +995,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                             )}
                           </button>
                         </td>
-                        <td className="py-3 px-4 font-sans font-bold text-slate-900">
+                        <td className="py-3 px-3 font-sans font-bold text-slate-900">
                           <button
                             onClick={() => toggleExpandMember(m.ledgerNo)}
                             className="hover:text-amber-800 text-left cursor-pointer focus:outline-none"
@@ -888,8 +1004,8 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                             {m.name}
                           </button>
                         </td>
-                        <td className="py-3 px-4 text-slate-600">{formatMoney(m.monthlyDue)}</td>
-                        <td className="py-3 px-4 font-sans whitespace-nowrap">
+                        <td className="py-3 px-3 text-slate-600">{formatMoney(m.monthlyDue)}</td>
+                        <td className="py-3 px-3 font-sans whitespace-nowrap">
                           {st === 'Paid' ? (
                             <span className="inline-flex items-center gap-1 px-2.5 py-0.5 text-[11px] font-bold rounded-full bg-emerald-100 text-emerald-800 border border-emerald-200">
                               <CheckCircle2 className="w-3 h-3 text-emerald-600" />
@@ -910,13 +1026,58 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                             </span>
                           )}
                         </td>
-                        <td className="py-3 px-4 font-bold text-emerald-800">{formatMoney(totals.totalPaid)}</td>
-                        <td className="py-3 px-4 text-slate-600">{totals.count}</td>
-                        <td className="py-3 px-4 text-slate-500">
+
+                        {/* Manual Opening Balance */}
+                        <td className="py-3 px-3">
+                          <button
+                            onClick={() => {
+                              setSelectedBalanceMember(m);
+                              setIsEditBalanceModalOpen(true);
+                            }}
+                            className="group inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-semibold bg-slate-100 hover:bg-amber-100 text-slate-700 hover:text-amber-900 border border-slate-200 hover:border-amber-300 transition-colors cursor-pointer"
+                            title="Click to manually update starting balance"
+                          >
+                            <span>{formatMoney(openingBal)}</span>
+                            <Pencil className="w-2.5 h-2.5 opacity-40 group-hover:opacity-100 text-amber-700" />
+                          </button>
+                        </td>
+
+                        {/* Total Paid (Auto from Transactions) */}
+                        <td className="py-3 px-3 font-bold text-emerald-800">
+                          {formatMoney(totals.totalPaid)}
+                        </td>
+
+                        {/* Effective Live Balance */}
+                        <td className="py-3 px-3 font-bold font-sans">
+                          <span
+                            className={`inline-block px-2 py-0.5 rounded text-xs font-mono font-bold ${
+                              liveEffectiveBal >= 0
+                                ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
+                                : 'bg-rose-50 text-rose-800 border border-rose-200'
+                            }`}
+                          >
+                            {formatMoney(liveEffectiveBal)}
+                          </span>
+                        </td>
+
+                        <td className="py-3 px-3 text-slate-600">{totals.count}</td>
+                        <td className="py-3 px-3 text-slate-500">
                           {totals.lastPaymentDate ? fmtDate(totals.lastPaymentDate) : '—'}
                         </td>
-                        <td className="py-3 px-4 text-right whitespace-nowrap font-sans">
+                        <td className="py-3 px-3 text-right whitespace-nowrap font-sans">
                           <div className="flex items-center justify-end gap-1">
+                            <button
+                              onClick={() => {
+                                setSelectedBalanceMember(m);
+                                setIsEditBalanceModalOpen(true);
+                              }}
+                              className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold text-emerald-800 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-md transition-colors cursor-pointer"
+                              title="Set or update member manual balance"
+                            >
+                              <Pencil className="w-3 h-3 text-emerald-700" />
+                              <span>Balance</span>
+                            </button>
+
                             {overdueItem && (
                               <button
                                 onClick={() => {
@@ -962,7 +1123,7 @@ export const MembersTab: React.FC<MembersTabProps> = ({
                       {/* Collapsible Individual Payment History Table */}
                       {isExpanded && (
                         <tr className="bg-slate-50/80">
-                          <td colSpan={8} className="p-2 sm:p-3">
+                          <td colSpan={10} className="p-2 sm:p-3">
                             <MemberCollapsibleHistory
                               member={m}
                               transactions={transactions}
@@ -1103,6 +1264,15 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             {/* Action Buttons */}
             <div className="flex items-center gap-2 shrink-0">
               <button
+                onClick={() => setIsAllMembersBalancePdfModalOpen(true)}
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer shadow-xs"
+                title="Generate & print official PDF statement of all member balances"
+              >
+                <FileText className="w-3.5 h-3.5 text-emerald-200" />
+                <span>All Members Balance (PDF)</span>
+              </button>
+
+              <button
                 onClick={handleExportMemberwiseTotalsCSV}
                 className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                 title="Export memberwise totals as CSV spreadsheet"
@@ -1113,11 +1283,11 @@ export const MembersTab: React.FC<MembersTabProps> = ({
 
               <button
                 onClick={handlePrintMemberwiseTotalsPDF}
-                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-white bg-slate-800 hover:bg-slate-900 rounded-lg transition-colors cursor-pointer shadow-xs"
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg transition-colors cursor-pointer"
                 title="Print clean memberwise payment report PDF"
               >
                 <Printer className="w-3.5 h-3.5" />
-                <span>Print PDF Statement</span>
+                <span>Payments PDF</span>
               </button>
             </div>
           </div>
@@ -1361,6 +1531,51 @@ export const MembersTab: React.FC<MembersTabProps> = ({
         organizationName={organizationName}
         selectedMonth={reminderMonth}
         singleTarget={singleTargetMember}
+        showToast={showToast}
+      />
+
+      {/* Edit Member Manual Balance Modal */}
+      <EditMemberBalanceModal
+        isOpen={isEditBalanceModalOpen}
+        onClose={() => {
+          setIsEditBalanceModalOpen(false);
+          setSelectedBalanceMember(null);
+        }}
+        member={selectedBalanceMember}
+        transactions={transactions}
+        currentOpeningBalance={
+          selectedBalanceMember
+            ? (settings?.memberBalanceOverrides?.[selectedBalanceMember.ledgerNo]?.openingBalance ??
+               selectedBalanceMember.openingBalance ??
+               0)
+            : 0
+        }
+        currentNotes={
+          selectedBalanceMember
+            ? (settings?.memberBalanceOverrides?.[selectedBalanceMember.ledgerNo]?.notes ??
+               selectedBalanceMember.balanceNotes)
+            : undefined
+        }
+        onSaveBalance={(ledgerNo, openingBal, notes) => {
+          if (onUpdateMemberBalance) {
+            onUpdateMemberBalance(ledgerNo, openingBal, notes);
+          }
+          showToast(`Balance updated for Ledger #${ledgerNo}`);
+        }}
+      />
+
+      {/* All Members Consolidated Balance Statement & PDF Modal */}
+      <AllMembersBalancePdfModal
+        isOpen={isAllMembersBalancePdfModalOpen}
+        onClose={() => setIsAllMembersBalancePdfModalOpen(false)}
+        members={members}
+        transactions={transactions}
+        settings={settings}
+        organizationName={organizationName}
+        onEditMemberBalance={(member) => {
+          setSelectedBalanceMember(member);
+          setIsEditBalanceModalOpen(true);
+        }}
         showToast={showToast}
       />
     </div>
