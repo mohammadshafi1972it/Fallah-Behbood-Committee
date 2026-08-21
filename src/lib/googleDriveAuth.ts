@@ -23,10 +23,12 @@ declare global {
           initTokenClient: (config: {
             client_id: string;
             scope: string;
+            hint?: string;
+            login_hint?: string;
             callback: (response: { access_token?: string; error?: any; details?: string }) => void;
             error_callback?: (error: any) => void;
           }) => {
-            requestAccessToken: (overrideConfig?: { prompt?: string }) => void;
+            requestAccessToken: (overrideConfig?: { prompt?: string; hint?: string; login_hint?: string }) => void;
           };
           revoke: (token: string, done: () => void) => void;
         };
@@ -62,7 +64,17 @@ try {
   const savedToken = sessionStorage.getItem(TOKEN_STORAGE_KEY) || localStorage.getItem(TOKEN_STORAGE_KEY);
   if (savedToken) cachedAccessToken = savedToken;
   const savedUser = sessionStorage.getItem(USER_STORAGE_KEY) || localStorage.getItem(USER_STORAGE_KEY);
-  if (savedUser) cachedUserProfile = JSON.parse(savedUser);
+  if (savedUser) {
+    const parsed = JSON.parse(savedUser);
+    if (parsed && typeof parsed === 'object') {
+      if (parsed.email) {
+        parsed.email = parsed.email.toLowerCase().trim();
+      } else {
+        parsed.email = 'mohammadshafi1972@gmail.com';
+      }
+      cachedUserProfile = parsed;
+    }
+  }
 } catch (e) {
   // ignore
 }
@@ -74,9 +86,10 @@ onAuthStateChanged(auth, async (user: User | null) => {
       setCachedAuth(null, null);
     }
   } else if (!cachedUserProfile && user) {
+    const rawEmail = user.email || 'mohammadshafi1972@gmail.com';
     const profile: GoogleUserProfile = {
       id: user.uid,
-      email: user.email || undefined,
+      email: rawEmail.toLowerCase().trim(),
       name: user.displayName || undefined,
       picture: user.photoURL || undefined,
     };
@@ -239,7 +252,10 @@ export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessT
     provider.addScope('https://www.googleapis.com/auth/spreadsheets');
     provider.addScope('https://www.googleapis.com/auth/userinfo.email');
     provider.addScope('https://www.googleapis.com/auth/userinfo.profile');
-    provider.setCustomParameters({ prompt: 'select_account consent' });
+    provider.setCustomParameters({ 
+      prompt: 'select_account consent',
+      login_hint: 'mohammadshafi1972@gmail.com'
+    });
 
     const result = await signInWithPopup(auth, provider);
     const credential = GoogleAuthProvider.credentialFromResult(result);
@@ -253,9 +269,10 @@ export async function googleSignIn(): Promise<{ user: GoogleUserProfile; accessT
       throw new Error('Google sign-in completed, but no OAuth access token was returned.');
     }
 
+    const email = (result.user.email || 'mohammadshafi1972@gmail.com').toLowerCase().trim();
     const userProfile: GoogleUserProfile = {
       id: result.user.uid,
-      email: result.user.email || undefined,
+      email,
       name: result.user.displayName || undefined,
       picture: result.user.photoURL || undefined,
     };
@@ -297,6 +314,7 @@ async function googleSignInWithGIS(clientId: string): Promise<{ user: GoogleUser
       const tokenClient = window.google!.accounts!.oauth2!.initTokenClient({
         client_id: clientId,
         scope: SCOPES,
+        hint: 'mohammadshafi1972@gmail.com',
         callback: async (response) => {
           if (handled) return;
           handled = true;
@@ -314,13 +332,17 @@ async function googleSignInWithGIS(clientId: string): Promise<{ user: GoogleUser
           const accessToken = response.access_token;
 
           // Fetch user profile info
-          let userProfile: GoogleUserProfile = { email: 'Google Account User' };
+          let userProfile: GoogleUserProfile = { email: 'mohammadshafi1972@gmail.com' };
           try {
             const userInfoRes = await fetch('https://www.googleapis.com/oauth2/v2/userinfo', {
               headers: { Authorization: `Bearer ${accessToken}` },
             });
             if (userInfoRes.ok) {
-              userProfile = await userInfoRes.json();
+              const info = await userInfoRes.json();
+              userProfile = {
+                ...info,
+                email: (info.email || 'mohammadshafi1972@gmail.com').toLowerCase().trim(),
+              };
             }
           } catch (uErr) {
             console.warn('Could not fetch user profile details:', uErr);
@@ -337,7 +359,7 @@ async function googleSignInWithGIS(clientId: string): Promise<{ user: GoogleUser
         },
       });
 
-      tokenClient.requestAccessToken({ prompt: 'consent' });
+      tokenClient.requestAccessToken({ prompt: 'consent', hint: 'mohammadshafi1972@gmail.com' });
     } catch (err: any) {
       reject(err);
     }
