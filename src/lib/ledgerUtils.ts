@@ -9,7 +9,8 @@ import {
   ContributionItem,
   MonthBalanceTableRow,
   MonthBalanceOverrides,
-  MemberBalanceItem
+  MemberBalanceItem,
+  MonthEndMemberBalanceItem
 } from '../types';
 
 export const INCOME_HEADS = [
@@ -65,6 +66,120 @@ export function normalizeName(s: string): string {
   return String(s || '').replace(/\u00a0/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+/**
+ * Checks if a ledger number corresponds to special Ledger Number 131
+ */
+export function isLedger131(ledgerNo: string | number | undefined): boolean {
+  if (ledgerNo === undefined || ledgerNo === null) return false;
+  const s = String(ledgerNo).trim().toLowerCase();
+  const numVal = parseInt(s.replace(/\D/g, ''), 10);
+  return s === '131' || s === '0131' || s === 'l-131' || s === 'l131' || numVal === 131;
+}
+
+/**
+ * Resolves the monthly contribution rate for a member.
+ * Default rule: Rs. 150/month (12 Months = Rs. 1,800)
+ * Exception: Ledger Number 131 has monthly contribution of @Rs. 300/month (12 Months = Rs. 3,600)
+ */
+export function getMemberMonthlyDue(
+  memberOrLedger: Member | { ledgerNo: string; monthlyDue?: number } | string | number | undefined,
+  defaultDue: number = 150
+): number {
+  if (!memberOrLedger) return defaultDue || 150;
+
+  if (typeof memberOrLedger === 'string' || typeof memberOrLedger === 'number') {
+    return isLedger131(memberOrLedger) ? 300 : (num(defaultDue) || 150);
+  }
+
+  const lNo = memberOrLedger.ledgerNo;
+  if (isLedger131(lNo)) {
+    // Ledger 131 defaults to 300/month unless explicitly set to a custom non-default value
+    if (memberOrLedger.monthlyDue !== undefined && memberOrLedger.monthlyDue > 0 && memberOrLedger.monthlyDue !== 150) {
+      return num(memberOrLedger.monthlyDue);
+    }
+    return 300;
+  }
+
+  return num(memberOrLedger.monthlyDue) || num(defaultDue) || 150;
+}
+
+export interface PaidUptoCalculation {
+  monthlyDue: number;
+  annualDue: number; // 12 * monthlyDue (Rs. 1,800 or Rs. 3,600 for Ledger 131)
+  monthsPaid: number;
+  monthsPaidExact: number;
+  isFullYearPaid: boolean;
+  remainingMonthsDue: number;
+  remainingAnnualDue: number;
+  paidUptoText: string;
+  paidUptoBadge: string;
+  paidUptoMonthName: string;
+}
+
+/**
+ * Calculates automatically how many months have been paid up to and remaining dues
+ * for a 12-Month fiscal session (@150=1800 or Ledger 131 @300=3600).
+ */
+export function computePaidUptoInfo(
+  totalPaid: number,
+  monthlyDue: number,
+  previousDue: number = 0
+): PaidUptoCalculation {
+  const rate = Math.max(1, monthlyDue || 150);
+  const annualDue = rate * 12; // 12 Months: 12 * 150 = 1800, 12 * 300 = 3600
+  const netPaidForSubscription = Math.max(0, totalPaid - previousDue);
+
+  const monthsPaidExact = Math.round((netPaidForSubscription / rate) * 100) / 100;
+  const fullMonthsPaid = Math.min(12, Math.floor(netPaidForSubscription / rate));
+  const excessPartial = netPaidForSubscription % rate;
+  const isFullYearPaid = netPaidForSubscription >= annualDue;
+
+  const remainingMonthsDue = Math.max(0, 12 - fullMonthsPaid);
+  const remainingAnnualDue = Math.max(0, annualDue - netPaidForSubscription);
+
+  let paidUptoText = '';
+  let paidUptoBadge = '';
+  let paidUptoMonthName = '';
+
+  if (isFullYearPaid) {
+    const advanceExtra = netPaidForSubscription - annualDue;
+    if (advanceExtra > 0) {
+      paidUptoText = `Paid Upto: Full Year (12/12 Mos) + ${formatMoney(advanceExtra)} Adv`;
+      paidUptoBadge = `12/12 Mos (+${formatMoney(advanceExtra)})`;
+    } else {
+      paidUptoText = `Paid Upto: Full Year (12/12 Mos — Nil Balance)`;
+      paidUptoBadge = `12/12 Mos (Paid Up)`;
+    }
+    paidUptoMonthName = 'Month 12 (Full Year 100%)';
+  } else if (netPaidForSubscription > 0) {
+    if (excessPartial === 0) {
+      paidUptoText = `Paid Upto: ${fullMonthsPaid}/12 Mos (${formatMoney(netPaidForSubscription)} of ${formatMoney(annualDue)})`;
+      paidUptoBadge = `${fullMonthsPaid}/12 Mos (${formatMoney(remainingAnnualDue)} Due)`;
+    } else {
+      paidUptoText = `Paid Upto: ${fullMonthsPaid} Mos + ${formatMoney(excessPartial)} Partial (${formatMoney(netPaidForSubscription)} of ${formatMoney(annualDue)})`;
+      paidUptoBadge = `${fullMonthsPaid}M+ (${formatMoney(remainingAnnualDue)} Due)`;
+    }
+    paidUptoMonthName = `Month ${fullMonthsPaid} of 12`;
+  } else {
+    paidUptoText = `0 Months Paid (${formatMoney(annualDue)} Annual Due)`;
+    paidUptoBadge = `0/12 Mos (${formatMoney(annualDue)} Due)`;
+    paidUptoMonthName = '0 / 12 Months';
+  }
+
+  return {
+    monthlyDue: rate,
+    annualDue,
+    monthsPaid: fullMonthsPaid,
+    monthsPaidExact,
+    isFullYearPaid,
+    remainingMonthsDue,
+    remainingAnnualDue,
+    paidUptoText,
+    paidUptoBadge,
+    paidUptoMonthName,
+  };
+}
+
 export function findMember(members: Member[], query: string): Member | undefined {
   if (!query) return undefined;
   const q = String(query).trim().toLowerCase();
@@ -106,6 +221,7 @@ export function calculateMemberTotals(transactions: Transaction[], ledgerNo: str
 /**
  * Computes live member balances incorporating manual opening/baseline balances
  * and dynamic real-time updates as payments are recorded in the ledger.
+ * Automatically enforces 12 Months @150=1800 (except Ledger 131 @300=3600).
  */
 export function computeMemberBalanceList(
   members: Member[],
@@ -126,6 +242,10 @@ export function computeMemberBalanceList(
   return members.map((m) => {
     const lNo = String(m.ledgerNo || '').trim();
     const memberTxns = incomeTxns.filter((t) => String(t.ledgerNo || '').trim() === lNo);
+
+    // Dynamic monthly rate: @150/mo for normal members, @300/mo for Ledger 131
+    const monthlyDue = getMemberMonthlyDue(m);
+    const annualDue = monthlyDue * 12; // 1800 for normal, 3600 for Ledger 131
 
     // Manual opening balance & previous due
     const override = memberBalanceOverrides ? memberBalanceOverrides[lNo] : undefined;
@@ -174,22 +294,25 @@ export function computeMemberBalanceList(
     // Effective mathematical live balance = (Manual Opening Balance) + (Total Paid to Date)
     const effectiveBalance = openingBalance + totalPaid;
 
-    // Total due target (previous arrears + monthly rate baseline)
-    const totalDue = previousDue > 0 ? previousDue : num(m.monthlyDue) || 150;
+    // Compute automatic Paid Upto calculation
+    const paidCalc = computePaidUptoInfo(totalPaid, monthlyDue, previousDue);
 
-    // Paid up when total payment received is greater than or equal to due payment
+    // Total due target (previous arrears + annual 12-month baseline)
+    const totalDue = previousDue > 0 ? previousDue + annualDue : annualDue;
+
+    // Paid up when total payment received is greater than or equal to due payment or full annual target
     const isPaidUp =
       totalPaid > 0 &&
-      (previousDue > 0 ? totalPaid >= previousDue : effectiveBalance >= 0);
+      (paidCalc.isFullYearPaid || (previousDue > 0 ? totalPaid >= previousDue : effectiveBalance >= 0));
 
     // When payment received is >= due payment and showNilBalanceWhenPaid is true, outstanding balance is Nil (0)
     let balanceDue = 0;
-    if (isPaidUp && showNilBalanceWhenPaid) {
+    if (paidCalc.isFullYearPaid && showNilBalanceWhenPaid) {
       balanceDue = 0;
     } else if (effectiveBalance < 0) {
       balanceDue = Math.abs(effectiveBalance);
-    } else if (totalDue > totalPaid) {
-      balanceDue = totalDue - totalPaid;
+    } else if (annualDue > totalPaid) {
+      balanceDue = annualDue - totalPaid;
     }
 
     // Balance status classification
@@ -210,7 +333,8 @@ export function computeMemberBalanceList(
       member: m,
       ledgerNo: m.ledgerNo,
       name: m.name,
-      monthlyDue: num(m.monthlyDue) || 150,
+      monthlyDue,
+      annualDue,
       phone: m.phone || '',
       address: m.address || '',
       openingBalance,
@@ -223,7 +347,15 @@ export function computeMemberBalanceList(
       lastPaymentDate,
       effectiveBalance,
       balanceDue,
+      monthsPaid: paidCalc.monthsPaid,
+      monthsPaidExact: paidCalc.monthsPaidExact,
+      paidUptoText: paidCalc.paidUptoText,
+      paidUptoBadge: paidCalc.paidUptoBadge,
+      paidUptoMonthName: paidCalc.paidUptoMonthName,
+      remainingMonthsDue: paidCalc.remainingMonthsDue,
+      remainingAnnualDue: paidCalc.remainingAnnualDue,
       isPaidUp,
+      isFullYearPaid: paidCalc.isFullYearPaid,
       showNilBalanceWhenPaid,
       status,
       balanceNotes: m.balanceNotes || override?.notes || '',
@@ -307,20 +439,30 @@ export function printAllMembersBalancePDF(
         balanceDisplay = `<span style="color:#334155; font-weight:bold;">${formatMoney(0)}</span>`;
       }
 
+      const is131 = isLedger131(item.ledgerNo);
+
       return `
-        <tr>
+        <tr style="${is131 ? 'background-color:#fffbeb;' : ''}">
           <td style="text-align:center; color:#64748b; font-size:8.5pt;">${idx + 1}</td>
-          <td style="font-weight:bold; font-family:monospace; color:#0f172a;">#${item.ledgerNo}</td>
+          <td style="font-weight:bold; font-family:monospace; color:${is131 ? '#b45309' : '#0f172a'};">
+            #${item.ledgerNo} ${is131 ? '<span style="font-size:7pt; background:#fef3c7; color:#92400e; padding:1px 4px; border-radius:3px;">@300</span>' : ''}
+          </td>
           <td style="font-weight:600; color:#0f172a;">
             ${item.name}
             ${item.phone ? `<div style="font-size:7.5pt; color:#64748b; font-weight:normal;">📱 ${item.phone}</div>` : ''}
           </td>
-          <td style="text-align:right; font-family:monospace; color:#475569;">${formatMoney(item.monthlyDue)}</td>
+          <td style="text-align:right; font-family:monospace; color:#475569;">
+            ${formatMoney(item.monthlyDue)}/m
+            <div style="font-size:7pt; color:#64748b;">(Target: ${formatMoney(item.annualDue)})</div>
+          </td>
           <td style="text-align:right; font-family:monospace; color:${item.previousDue > 0 ? '#b91c1c' : item.openingBalance > 0 ? '#047857' : '#64748b'}; font-weight:500;">
             ${item.previousDue > 0 ? `${formatMoney(item.previousDue)} <span style="font-size:7pt; color:#991b1b;">(Due)</span>` : item.openingBalance !== 0 ? formatMoney(item.openingBalance) : '—'}
           </td>
           <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
             ${formatMoney(item.totalPaid)}
+          </td>
+          <td style="text-align:center; font-size:8pt; font-family:sans-serif; color:${item.isFullYearPaid ? '#0f766e' : '#475569'}; font-weight:600;">
+            ${item.paidUptoBadge}
           </td>
           <td style="text-align:center; font-family:monospace; font-size:8.5pt; color:#475569;">
             ${item.receiptsCount > 0 ? `${item.receiptsCount} entries` : '—'}
@@ -408,12 +550,13 @@ export function printAllMembersBalancePDF(
             <th style="width:25px; text-align:center;">#</th>
             <th style="width:65px;">Ledger #</th>
             <th>Member Name</th>
-            <th style="text-align:right; width:70px;">Monthly Rate</th>
-            <th style="text-align:right; width:85px;">Previous Due (Manual)</th>
-            <th style="text-align:right; width:85px;">Total Paid (Auto)</th>
-            <th style="text-align:center; width:60px;">Receipts</th>
-            <th style="width:75px;">Last Paid</th>
-            <th style="text-align:right; width:95px;">Balance / Status</th>
+            <th style="text-align:right; width:80px;">Monthly Rate (12M Total)</th>
+            <th style="text-align:right; width:80px;">Previous Due (Manual)</th>
+            <th style="text-align:right; width:80px;">Total Paid (Auto)</th>
+            <th style="text-align:center; width:85px;">Paid Upto (Months)</th>
+            <th style="text-align:center; width:55px;">Receipts</th>
+            <th style="width:70px;">Last Paid</th>
+            <th style="text-align:right; width:90px;">Balance / Status</th>
             <th style="text-align:center; width:65px;">Status</th>
           </tr>
         </thead>
@@ -430,6 +573,7 @@ export function printAllMembersBalancePDF(
             <td style="text-align:right; font-family:monospace; color:#065f46; font-size:9.5pt;">
               ${formatMoney(grandPaid)}
             </td>
+            <td style="text-align:center; font-family:monospace; font-size:8pt; color:#0f766e;">${paidUpCount} Paid Up</td>
             <td style="text-align:center; font-family:monospace;">${grandReceipts}</td>
             <td style="color:#64748b;">—</td>
             <td style="text-align:right; font-family:monospace; font-size:10pt; color:#0f172a;">
@@ -493,17 +637,20 @@ export function exportAllMembersBalanceExcel(
       'Member Name',
       'Phone Number',
       'Address',
-      'Monthly Subscription (Rs.)',
-      'Manual Previous Due / Opening (Rs.)',
+      'Monthly Rate (Rs.)',
+      '12-Month Target (Rs.)',
+      'Manual Previous Due (Rs.)',
       'Total Paid to Date (Rs.)',
       'Subscription Paid (Rs.)',
       'Other Funds / Donations (Rs.)',
+      'Paid Upto (Months)',
+      'Paid Upto Description',
       'Receipts Count',
       'Last Payment Date',
       'Effective Live Balance (Rs.)',
       'Display Balance',
       'Balance Status',
-      'Paid Up Status',
+      'Full Year Paid Up',
       'Balance Notes / Remarks',
     ],
     ...memberBalances.map((m, idx) => [
@@ -513,16 +660,19 @@ export function exportAllMembersBalanceExcel(
       m.phone || '',
       m.address || '',
       m.monthlyDue,
+      m.annualDue,
       m.previousDue > 0 ? -m.previousDue : m.openingBalance,
       m.totalPaid,
       m.subscriptionPaid,
       m.otherPaid,
+      m.paidUptoBadge,
+      m.paidUptoText,
       m.receiptsCount,
       m.lastPaymentDate ? fmtDate(m.lastPaymentDate) : '—',
       m.effectiveBalance,
       m.isPaidUp && m.showNilBalanceWhenPaid && m.effectiveBalance <= 0 ? 'Nil' : m.effectiveBalance,
       m.status,
-      m.isPaidUp ? 'Paid Up' : 'Pending',
+      m.isFullYearPaid ? 'YES (12/12)' : 'NO',
       m.balanceNotes || '',
     ]),
   ];
@@ -534,6 +684,7 @@ export function exportAllMembersBalanceExcel(
   let grandOther = 0;
   let grandEffective = 0;
   let grandCount = 0;
+  let grandAnnual = 0;
 
   memberBalances.forEach((m) => {
     grandOpening += m.openingBalance;
@@ -542,6 +693,7 @@ export function exportAllMembersBalanceExcel(
     grandOther += m.otherPaid;
     grandEffective += m.effectiveBalance;
     grandCount += m.receiptsCount;
+    grandAnnual += m.annualDue;
   });
 
   data.push([
@@ -551,10 +703,13 @@ export function exportAllMembersBalanceExcel(
     '—',
     '—',
     '—',
+    grandAnnual,
     grandOpening,
     grandPaid,
     grandSub,
     grandOther,
+    '—',
+    '—',
     grandCount,
     '—',
     grandEffective,
@@ -568,6 +723,412 @@ export function exportAllMembersBalanceExcel(
   XLSX.utils.book_append_sheet(wb, ws, 'Member Balances Ledger');
 
   const filename = `All_Members_Balance_Report_${organizationName.replace(/\s+/g, '_')}_${todayISO()}.xlsx`;
+  XLSX.writeFile(wb, filename);
+}
+
+/**
+ * Computes consolidated month-end member balances as of a specific month end.
+ * Calculates cumulative dues vs actual payments, paid-upto status, and balances.
+ */
+export function computeMonthEndMemberBalances(
+  members: Member[],
+  transactions: Transaction[],
+  asOfMonth: string, // YYYY-MM
+  memberBalanceOverrides?: Record<
+    string,
+    {
+      openingBalance?: number;
+      previousDue?: number;
+      showNilBalanceWhenPaid?: boolean;
+      notes?: string;
+    }
+  >
+): MonthEndMemberBalanceItem[] {
+  // Collect all months sorted to determine month index (1 to 12)
+  const monthSet = new Set<string>();
+  transactions.forEach((t) => {
+    if (t.date && t.date.length >= 7) monthSet.add(t.date.slice(0, 7));
+    if (t.forMonth && t.forMonth.length >= 7) monthSet.add(t.forMonth.slice(0, 7));
+  });
+  if (asOfMonth) monthSet.add(asOfMonth);
+  const sortedMonths = Array.from(monthSet).sort();
+
+  let monthIndex = sortedMonths.indexOf(asOfMonth) + 1;
+  if (monthIndex <= 0) monthIndex = 1;
+  if (monthIndex > 12) monthIndex = 12;
+
+  // Filter transactions recorded up to asOfMonth
+  const incomeTxnsToDate = transactions.filter((t) => {
+    if (t.type !== 'Income') return false;
+    const tMonth = t.forMonth || (t.date ? t.date.slice(0, 7) : '');
+    return tMonth && tMonth <= asOfMonth;
+  });
+
+  const baseList = computeMemberBalanceList(members, incomeTxnsToDate, memberBalanceOverrides);
+
+  return baseList.map((item) => {
+    const monthlyRate = item.monthlyDue; // 150 or 300 for 131
+    const cumulativeDueToDate = (monthIndex * monthlyRate) + item.previousDue;
+    const cumulativePaidToDate = item.totalPaid;
+    const monthEndEffectiveBalance = item.openingBalance + cumulativePaidToDate - (monthIndex * monthlyRate);
+
+    const isMonthEndPaidUp = cumulativePaidToDate >= cumulativeDueToDate || item.isFullYearPaid;
+
+    let monthEndStatus: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active' = 'Active';
+    if (cumulativePaidToDate > cumulativeDueToDate) {
+      monthEndStatus = 'Advance';
+    } else if (isMonthEndPaidUp && item.showNilBalanceWhenPaid) {
+      monthEndStatus = 'Paid Up (Nil)';
+    } else if (cumulativePaidToDate === cumulativeDueToDate) {
+      monthEndStatus = 'Cleared';
+    } else if (cumulativePaidToDate < cumulativeDueToDate) {
+      monthEndStatus = 'Arrears';
+    }
+
+    const paidInfo = computePaidUptoInfo(cumulativePaidToDate, monthlyRate, item.previousDue);
+
+    return {
+      ...item,
+      asOfMonth,
+      asOfMonthLabel: getMonthLabel(asOfMonth),
+      monthIndex,
+      cumulativeDueToDate,
+      cumulativePaidToDate,
+      monthEndEffectiveBalance,
+      monthEndStatus,
+      monthEndPaidUptoText: paidInfo.paidUptoText,
+    };
+  });
+}
+
+/**
+ * Print & Export High-Fidelity Consolidated Month-End Member Balance PDF Statement
+ */
+export function printMonthEndConsolidatedMemberPDF(
+  monthRow: MonthBalanceTableRow,
+  memberBalances: MonthEndMemberBalanceItem[],
+  organizationName: string,
+  options?: {
+    orientation?: 'portrait' | 'landscape';
+    sessionTag?: string;
+    subTitle?: string;
+    filterLabel?: string;
+  }
+): void {
+  if (!memberBalances || memberBalances.length === 0) return;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+
+  const orientation = options?.orientation || 'portrait';
+  const sessionTag = options?.sessionTag || 'Session 2026–27';
+  const subTitle = options?.subTitle || 'Income & Expenditure Ledger — Pampore';
+  const filterLabel = options?.filterLabel || `Consolidated as of ${monthRow.monthLabel}`;
+
+  // KPI Calculations
+  let grandDueToDate = 0;
+  let grandPaidToDate = 0;
+  let grandAnnual = 0;
+  let paidUpCount = 0;
+  let arrearsCount = 0;
+  let advanceCount = 0;
+
+  memberBalances.forEach((item) => {
+    grandDueToDate += item.cumulativeDueToDate;
+    grandPaidToDate += item.cumulativePaidToDate;
+    grandAnnual += item.annualDue;
+    if (item.monthEndStatus === 'Paid Up (Nil)' || item.isFullYearPaid || item.monthEndStatus === 'Cleared') {
+      paidUpCount++;
+    } else if (item.monthEndStatus === 'Advance') {
+      advanceCount++;
+    } else if (item.monthEndStatus === 'Arrears') {
+      arrearsCount++;
+    }
+  });
+
+  const rowsHtml = memberBalances
+    .map((item, idx) => {
+      const isPositive = item.monthEndEffectiveBalance > 0;
+      const isNegative = item.monthEndEffectiveBalance < 0;
+      const isNil = (item.isPaidUp || item.monthEndStatus === 'Paid Up (Nil)') && item.showNilBalanceWhenPaid && item.monthEndEffectiveBalance <= 0;
+
+      const statusBadge =
+        item.monthEndStatus === 'Advance'
+          ? '<span style="background:#dcfce7; color:#166534; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Advance</span>'
+          : item.monthEndStatus === 'Paid Up (Nil)' || isNil
+          ? '<span style="background:#dcfce7; color:#0f766e; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Paid Up (Nil)</span>'
+          : item.monthEndStatus === 'Arrears'
+          ? '<span style="background:#fee2e2; color:#991b1b; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Arrears</span>'
+          : item.monthEndStatus === 'Cleared'
+          ? '<span style="background:#f1f5f9; color:#475569; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Cleared</span>'
+          : '<span style="background:#e0f2fe; color:#0369a1; padding:2px 6px; border-radius:4px; font-weight:bold; font-size:8pt;">Active</span>';
+
+      let balanceDisplay = '';
+      if (isNil) {
+        balanceDisplay = '<span style="color:#0f766e; font-weight:bold;">Nil (Paid Up)</span>';
+      } else if (isPositive) {
+        balanceDisplay = `<span style="color:#065f46; font-weight:bold;">+${formatMoney(item.monthEndEffectiveBalance)}</span> <span style="font-size:7pt; color:#166534;">(Adv)</span>`;
+      } else if (isNegative) {
+        balanceDisplay = `<span style="color:#b91c1c; font-weight:bold;">-${formatMoney(Math.abs(item.monthEndEffectiveBalance))}</span>`;
+      } else {
+        balanceDisplay = `<span style="color:#334155; font-weight:bold;">${formatMoney(0)}</span>`;
+      }
+
+      const is131 = isLedger131(item.ledgerNo);
+
+      return `
+        <tr style="${is131 ? 'background-color:#fffbeb;' : ''}">
+          <td style="text-align:center; color:#64748b; font-size:8.5pt;">${idx + 1}</td>
+          <td style="font-weight:bold; font-family:monospace; color:${is131 ? '#b45309' : '#0f172a'};">
+            #${item.ledgerNo} ${is131 ? '<span style="font-size:7pt; background:#fef3c7; color:#92400e; padding:1px 4px; border-radius:3px;">@300</span>' : ''}
+          </td>
+          <td style="font-weight:600; color:#0f172a;">
+            ${item.name}
+            ${item.phone ? `<div style="font-size:7.5pt; color:#64748b; font-weight:normal;">📱 ${item.phone}</div>` : ''}
+          </td>
+          <td style="text-align:right; font-family:monospace; color:#475569;">
+            ${formatMoney(item.monthlyDue)}/m
+            <div style="font-size:7pt; color:#64748b;">(12M: ${formatMoney(item.annualDue)})</div>
+          </td>
+          <td style="text-align:right; font-family:monospace; color:#64748b;">
+            ${formatMoney(item.cumulativeDueToDate)}
+          </td>
+          <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
+            ${formatMoney(item.cumulativePaidToDate)}
+          </td>
+          <td style="text-align:center; font-size:8pt; font-family:sans-serif; color:${item.isFullYearPaid ? '#0f766e' : '#475569'}; font-weight:600;">
+            ${item.paidUptoBadge}
+          </td>
+          <td style="text-align:right; font-family:monospace; font-size:9.5pt; background:${
+            isPositive ? '#f0fdf4' : isNil ? '#f0fdfa' : isNegative ? '#fef2f2' : 'transparent'
+          };">
+            ${balanceDisplay}
+          </td>
+          <td style="text-align:center;">${statusBadge}</td>
+        </tr>
+      `;
+    })
+    .join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <title>Consolidated Month-End Member Balance Statement — ${monthRow.monthLabel} — ${organizationName}</title>
+      <style>
+        @page { size: A4 ${orientation}; margin: 10mm; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; margin: 0; padding: 10px; font-size: 9pt; line-height: 1.4; }
+        .header { text-align: center; border-bottom: 2px solid #b8863b; padding-bottom: 8px; margin-bottom: 12px; }
+        .header h1 { font-size: 16pt; margin: 0; color: #1F3A5F; font-family: Georgia, serif; text-transform: uppercase; letter-spacing: 0.5px; }
+        .header p { margin: 2px 0 0; font-size: 9.5pt; color: #475569; }
+        .header .meta { margin-top: 4px; font-size: 9pt; font-weight: bold; color: #b8863b; letter-spacing: 0.3px; }
+        
+        .kpi-container { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 12px; background: #f8fafc; padding: 8px 12px; border: 1px solid #e2e8f0; border-radius: 6px; }
+        .kpi-box { flex: 1; text-align: center; }
+        .kpi-box .val { font-size: 11pt; font-weight: bold; color: #0f172a; margin-top: 2px; font-family: monospace; }
+        .kpi-box .lbl { font-size: 7.5pt; text-transform: uppercase; color: #64748b; font-weight: 600; }
+        
+        table { width: 100%; border-collapse: collapse; font-size: 8.5pt; margin-top: 5px; }
+        th, td { border: 1px solid #cbd5e1; padding: 5px 6px; text-align: left; }
+        th { background-color: #1e293b; color: #ffffff; font-size: 8pt; text-transform: uppercase; letter-spacing: 0.5px; }
+        tr:nth-child(even) { background-color: #f8fafc; }
+        .total-row { background-color: #fef3c7 !important; font-weight: bold; font-size: 9pt; border-top: 2px solid #b8863b; }
+        
+        .audit-box { margin-top: 20px; display: flex; justify-content: space-between; gap: 20px; padding-top: 15px; border-top: 1px solid #cbd5e1; font-size: 8.5pt; }
+        .sig-col { text-align: center; flex: 1; }
+        .sig-line { border-top: 1px dashed #64748b; margin-top: 35px; padding-top: 4px; font-weight: 600; color: #334155; }
+        .sig-role { font-size: 7.5pt; color: #64748b; }
+        
+        .footer { margin-top: 15px; display: flex; justify-content: space-between; font-size: 7.5pt; color: #64748b; border-top: 1px solid #f1f5f9; padding-top: 4px; }
+      </style>
+    </head>
+    <body>
+      <div class="header">
+        <h1>${organizationName || 'Fallah Behbood Committee'}</h1>
+        <p>${subTitle} • Pampore, Kashmir</p>
+        <div class="meta">CONSOLIDATED MEMBER BALANCE LIST — AS OF ${monthRow.monthLabel.toUpperCase()} (${sessionTag})</div>
+      </div>
+
+      <div class="kpi-container">
+        <div class="kpi-box">
+          <div class="lbl">Total Members</div>
+          <div class="val">${memberBalances.length}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Paid Up / Cleared</div>
+          <div class="val" style="color:#0f766e;">${paidUpCount} / ${memberBalances.length}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Due Upto ${monthRow.monthLabel}</div>
+          <div class="val" style="color:#475569;">${formatMoney(grandDueToDate)}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Total Paid to Date</div>
+          <div class="val" style="color:#047857;">${formatMoney(grandPaidToDate)}</div>
+        </div>
+        <div class="kpi-box">
+          <div class="lbl">Pending Arrears</div>
+          <div class="val" style="color:#b91c1c;">${arrearsCount} Members</div>
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th style="width:25px; text-align:center;">#</th>
+            <th style="width:65px;">Ledger #</th>
+            <th>Member Name</th>
+            <th style="text-align:right; width:85px;">Monthly Rate (12M Total)</th>
+            <th style="text-align:right; width:85px;">Due Upto Month End</th>
+            <th style="text-align:right; width:85px;">Paid to Date</th>
+            <th style="text-align:center; width:90px;">Paid Upto (Status)</th>
+            <th style="text-align:right; width:95px;">Month-End Balance</th>
+            <th style="text-align:center; width:65px;">Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rowsHtml}
+          <tr class="total-row">
+            <td colspan="3" style="text-align:right; font-weight:bold; text-transform:uppercase;">
+              CONSOLIDATED TOTAL (${memberBalances.length} MEMBERS):
+            </td>
+            <td style="text-align:right; font-family:monospace;">${formatMoney(grandAnnual)} (12M)</td>
+            <td style="text-align:right; font-family:monospace; color:#475569;">
+              ${formatMoney(grandDueToDate)}
+            </td>
+            <td style="text-align:right; font-family:monospace; color:#065f46; font-size:9.5pt;">
+              ${formatMoney(grandPaidToDate)}
+            </td>
+            <td style="text-align:center; font-family:monospace; font-size:8pt; color:#0f766e;">${paidUpCount} Paid Up</td>
+            <td style="text-align:right; font-family:monospace; font-size:10pt; color:#0f172a;">
+              ${formatMoney(grandPaidToDate - grandDueToDate)}
+            </td>
+            <td style="text-align:center; font-size:8pt;">AUDITED</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <div class="audit-box">
+        <div class="sig-col">
+          <div class="sig-line">Prepared By / Accountant</div>
+          <div class="sig-role">Fallah Behbood Committee</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">Treasurer / Cashier</div>
+          <div class="sig-role">Verified Physical & Ledger Count</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">Audited By / General Secretary</div>
+          <div class="sig-role">Internal Audit Committee</div>
+        </div>
+        <div class="sig-col">
+          <div class="sig-line">President / Chairman</div>
+          <div class="sig-role">Approved & Sealed</div>
+        </div>
+      </div>
+
+      <div class="footer">
+        <div>Filter: ${filterLabel} • Report generated for ${organizationName}</div>
+        <div>Statement Date: ${fmtDate(todayISO())} • Printed on: ${new Date().toLocaleString()}</div>
+      </div>
+
+      <script>
+        window.onload = function() { window.print(); }
+      </script>
+    </body>
+    </html>
+  `;
+
+  printWindow.document.write(html);
+  printWindow.document.close();
+}
+
+/**
+ * Export Consolidated Month-End Member Balance Spreadsheet to Excel (.xlsx)
+ */
+export function exportMonthEndConsolidatedMemberExcel(
+  monthRow: MonthBalanceTableRow,
+  memberBalances: MonthEndMemberBalanceItem[],
+  organizationName: string
+): void {
+  if (!memberBalances || memberBalances.length === 0) return;
+
+  const wb = XLSX.utils.book_new();
+
+  const data = [
+    [
+      'S.No',
+      'Ledger No.',
+      'Member Name',
+      'Phone Number',
+      'Address',
+      'Monthly Rate (Rs.)',
+      '12-Month Target (Rs.)',
+      `Due Upto ${monthRow.monthLabel} (Rs.)`,
+      'Total Paid to Date (Rs.)',
+      'Paid Upto (Months)',
+      'Paid Upto Description',
+      'Month-End Balance (Rs.)',
+      'Display Balance',
+      'Month-End Status',
+      'Full Year Paid Up',
+      'Balance Notes / Remarks',
+    ],
+    ...memberBalances.map((m, idx) => [
+      idx + 1,
+      m.ledgerNo,
+      m.name,
+      m.phone || '',
+      m.address || '',
+      m.monthlyDue,
+      m.annualDue,
+      m.cumulativeDueToDate,
+      m.cumulativePaidToDate,
+      m.paidUptoBadge,
+      m.paidUptoText,
+      m.monthEndEffectiveBalance,
+      (m.isPaidUp || m.monthEndStatus === 'Paid Up (Nil)') && m.showNilBalanceWhenPaid && m.monthEndEffectiveBalance <= 0 ? 'Nil' : m.monthEndEffectiveBalance,
+      m.monthEndStatus,
+      m.isFullYearPaid ? 'YES (12/12)' : 'NO',
+      m.balanceNotes || '',
+    ]),
+  ];
+
+  // Add Grand Total row
+  let grandDueToDate = 0;
+  let grandPaidToDate = 0;
+  let grandAnnual = 0;
+
+  memberBalances.forEach((m) => {
+    grandDueToDate += m.cumulativeDueToDate;
+    grandPaidToDate += m.cumulativePaidToDate;
+    grandAnnual += m.annualDue;
+  });
+
+  data.push([
+    'TOTAL',
+    '—',
+    `Grand Total (${memberBalances.length} Members)`,
+    '—',
+    '—',
+    '—',
+    grandAnnual,
+    grandDueToDate,
+    grandPaidToDate,
+    '—',
+    '—',
+    grandPaidToDate - grandDueToDate,
+    '—',
+    'Audited',
+    'Consolidated Month-End Statement',
+    '',
+  ]);
+
+  const ws = XLSX.utils.aoa_to_sheet(data);
+  XLSX.utils.book_append_sheet(wb, ws, `Balance_${monthRow.month}`);
+
+  const filename = `Consolidated_Member_Balances_${monthRow.month}_${organizationName.replace(/\s+/g, '_')}.xlsx`;
   XLSX.writeFile(wb, filename);
 }
 

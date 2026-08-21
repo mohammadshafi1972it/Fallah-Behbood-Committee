@@ -35,7 +35,8 @@ export interface MemberBalanceItem {
   member: Member;
   ledgerNo: string;
   name: string;
-  monthlyDue: number;
+  monthlyDue: number; // e.g. 150/mo, or 300/mo for Ledger 131
+  annualDue: number; // 12 Months target: 12 * 150 = 1800, or 12 * 300 = 3600 for Ledger 131
   phone?: string;
   address?: string;
   openingBalance: number; // Manual starting balance (+ for advance, - for arrears)
@@ -48,10 +49,29 @@ export interface MemberBalanceItem {
   lastPaymentDate: string | null;
   effectiveBalance: number; // True mathematical balance: openingBalance + totalPaid
   balanceDue: number; // Outstanding due balance (0 / Nil when paid up and Nil option is active)
+  monthsPaid: number; // Number of full months paid (e.g. 4.0 or 12.0)
+  monthsPaidExact: number; // Exact months paid (totalPaid / monthlyDue)
+  paidUptoText: string; // e.g. "Paid Upto: Full Year (12/12 Months - Nil)" or "Paid Upto: 4 Months (Rs. 600 / 1800)"
+  paidUptoBadge: string; // e.g. "12/12 Mos (Paid Up)" or "4/12 Mos"
+  paidUptoMonthName?: string; // e.g. "Month 12 (Full Year)" or "Month 4 (Jul)"
+  remainingMonthsDue: number; // 12 - monthsPaid (0 when paid up)
+  remainingAnnualDue: number; // annualDue - totalPaid (0 when paid up)
   isPaidUp: boolean; // True when payment received is greater than or equal to due payment
+  isFullYearPaid: boolean; // True when payment received >= annual target (1800 or 3600 for #131)
   showNilBalanceWhenPaid: boolean; // Whether the balance displays as Nil when paid up
   status: 'Paid Up (Nil)' | 'Advance' | 'Cleared' | 'Arrears' | 'Active';
   balanceNotes?: string;
+}
+
+export interface MonthEndMemberBalanceItem extends MemberBalanceItem {
+  asOfMonth: string; // YYYY-MM
+  asOfMonthLabel: string; // e.g. "June 2026"
+  monthIndex: number; // 1 to 12 in the session
+  cumulativeDueToDate: number; // Expected due up to this month end (monthIndex * monthlyDue + previousDue)
+  cumulativePaidToDate: number; // Total payments made up to the end of this month
+  monthEndEffectiveBalance: number; // Balance as of month end: (cumulativePaidToDate - cumulativeDueToDate)
+  monthEndStatus: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active';
+  monthEndPaidUptoText: string;
 }
 
 export interface MonthBalanceConfig {

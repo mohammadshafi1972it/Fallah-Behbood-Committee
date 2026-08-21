@@ -33,6 +33,8 @@ import {
 import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 import { MonthBalanceReportModal } from './MonthBalanceReportModal';
 import { ManualMonthBalanceModal } from './ManualMonthBalanceModal';
+import { ConsolidatedMonthEndMemberModal } from './ConsolidatedMonthEndMemberModal';
+import { Users, FileText } from 'lucide-react';
 
 interface MonthEndTabProps {
   transactions: Transaction[];
@@ -98,6 +100,15 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
 
   const [isManualModalOpen, setIsManualModalOpen] = useState(false);
   const [targetManualMonthRow, setTargetManualMonthRow] = useState<MonthBalanceTableRow | null>(null);
+
+  // Consolidated Month-End Member Balance Statement Modal
+  const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
+  const [targetConsolidatedMonthRow, setTargetConsolidatedMonthRow] = useState<MonthBalanceTableRow | null>(null);
+
+  const handleOpenConsolidatedReport = (row: MonthBalanceTableRow) => {
+    setTargetConsolidatedMonthRow(row);
+    setIsConsolidatedModalOpen(true);
+  };
 
   const memberContributions = useMemo(() => {
     return calculateContributionsForMonth(members, transactions, selectedMonth);
@@ -221,13 +232,23 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Consolidated Member Balance List for Selected Month */}
+          <button
+            onClick={() => handleOpenConsolidatedReport(currentMonthRow)}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-all shadow-2xs cursor-pointer hover:shadow-xs"
+            title="Generate consolidated balance list for all members as of month end"
+          >
+            <FileSpreadsheet className="w-4 h-4 text-emerald-200" />
+            <span>Consolidated Member Balances ({currentMonthRow.monthLabel})</span>
+          </button>
+
           {/* Quick WhatsApp Report for Selected Month */}
           <button
             onClick={() => handleOpenWhatsAppReport(currentMonthRow)}
             className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-white bg-[#25D366] hover:bg-[#1EBE5D] rounded-lg transition-all shadow-2xs cursor-pointer hover:shadow-xs"
           >
             <MessageSquare className="w-4 h-4" />
-            <span>WhatsApp Report ({currentMonthRow.monthLabel})</span>
+            <span>WhatsApp Report</span>
           </button>
 
           {/* Quick Manual Entry for Selected Month */}
@@ -463,6 +484,15 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
                     {/* Quick Action Buttons */}
                     <td className="py-3 px-3 text-right font-sans" onClick={(e) => e.stopPropagation()}>
                       <div className="flex items-center justify-end gap-1.5">
+                        {/* Consolidated Member Balances Button */}
+                        <button
+                          onClick={() => handleOpenConsolidatedReport(r)}
+                          className="p-1.5 text-emerald-800 bg-emerald-50 hover:bg-emerald-100 rounded-lg transition-colors border border-emerald-300 cursor-pointer"
+                          title="View Consolidated Member Balances as of Month End & Print PDF"
+                        >
+                          <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-700" />
+                        </button>
+
                         {/* WhatsApp Report Button */}
                         <button
                           onClick={() => handleOpenWhatsAppReport(r)}
@@ -513,11 +543,19 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
 
           <div className="flex items-center gap-2">
             <button
+              onClick={() => handleOpenConsolidatedReport(currentMonthRow)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer shadow-2xs"
+            >
+              <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-200" />
+              <span>Consolidated Balances Statement (PDF / Excel)</span>
+            </button>
+
+            <button
               onClick={() => handleOpenWhatsAppReport(currentMonthRow)}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-bold text-emerald-800 bg-emerald-100/70 hover:bg-emerald-200 rounded-lg transition-colors cursor-pointer border border-emerald-300"
             >
               <Send className="w-3.5 h-3.5 text-emerald-700" />
-              <span>Share Month Statement on WhatsApp</span>
+              <span>Share Month Statement</span>
             </button>
           </div>
         </div>
@@ -791,6 +829,17 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
         organizationName={settings.organizationName}
         selectedMonth={selectedMonth}
         singleTarget={singleTargetMember}
+        showToast={showToast}
+      />
+
+      {/* Consolidated Month-End Member Balance Modal */}
+      <ConsolidatedMonthEndMemberModal
+        isOpen={isConsolidatedModalOpen}
+        onClose={() => setIsConsolidatedModalOpen(false)}
+        monthRow={targetConsolidatedMonthRow}
+        members={members}
+        transactions={transactions}
+        settings={settings}
         showToast={showToast}
       />
     </div>

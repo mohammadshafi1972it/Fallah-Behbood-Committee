@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { Member, Transaction } from '../types';
-import { formatMoney, num, calculateMemberTotals } from '../lib/ledgerUtils';
+import { formatMoney, num, calculateMemberTotals, isLedger131, getMemberMonthlyDue } from '../lib/ledgerUtils';
 import {
   X,
   Save,
@@ -68,6 +68,10 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
 
   if (!isOpen || !member) return null;
 
+  const is131 = isLedger131(member.ledgerNo);
+  const memberMonthlyRate = getMemberMonthlyDue(member.ledgerNo, member.monthlyDue);
+  const annualTarget = memberMonthlyRate * 12; // 1800 for 150, 3600 for 131
+
   // Auto-calculated totals from ledger for this member
   const memberTotals = calculateMemberTotals(transactions, member.ledgerNo);
   const totalPaid = memberTotals.totalPaid;
@@ -81,8 +85,8 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
   const mathematicalBalance = openingBalance + totalPaid;
 
   // Effective due amount to compare against
-  const expectedDue = previousDue > 0 ? previousDue : num(member.monthlyDue) || 150;
-  const isPaidUp = totalPaid > 0 && (previousDue > 0 ? totalPaid >= previousDue : mathematicalBalance >= 0);
+  const expectedDue = previousDue > 0 ? previousDue : memberMonthlyRate;
+  const isPaidUp = totalPaid > 0 && (previousDue > 0 ? totalPaid >= previousDue : (totalPaid >= annualTarget || mathematicalBalance >= 0));
 
   // Resulting displayed balance
   const isNilDisplay = isPaidUp && showNilWhenPaid && mathematicalBalance <= 0;
@@ -123,8 +127,17 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
             <DollarSign className="w-5 h-5" />
           </div>
           <div>
-            <h3 className="text-base font-bold text-slate-900">
-              Manual Member Balance Configuration
+            <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+              <span>Manual Member Balance Configuration</span>
+              {is131 ? (
+                <span className="text-[10px] font-sans font-bold bg-amber-100 text-amber-900 border border-amber-300 px-2 py-0.5 rounded-full">
+                  Special Rate: Rs. 300/mo (12M: Rs. 3,600)
+                </span>
+              ) : (
+                <span className="text-[10px] font-sans font-bold bg-slate-100 text-slate-700 border border-slate-200 px-2 py-0.5 rounded-full">
+                  Standard Rate: Rs. 150/mo (12M: Rs. 1,800)
+                </span>
+              )}
             </h3>
             <p className="text-xs text-slate-500">
               Configure previous dues & automatic live balance for{' '}
@@ -140,8 +153,9 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
             <span>Automatic Live Balance & Nil Paid-Up Logic:</span>
           </div>
           <p className="text-[11px] text-emerald-800 leading-relaxed">
+            • <strong>Monthly Due:</strong> Rs. {memberMonthlyRate}/month (12 Months target: Rs. {annualTarget.toLocaleString()}).<br />
             • <strong>Auto-Updating:</strong> Live balance automatically updates whenever a payment is received in the ledger.<br />
-            • <strong>Nil on Paid-Up:</strong> When payment received is greater than or equal to due payment, the balance is shown as <strong>Nil</strong>.
+            • <strong>Nil on Paid-Up:</strong> When payment received is greater than or equal to due payment, the balance is shown as <strong>Nil (Paid Up)</strong>.
           </p>
         </div>
 
@@ -217,43 +231,71 @@ export const EditMemberBalanceModal: React.FC<EditMemberBalanceModalProps> = ({
                 onClick={() => setAmountInput('0')}
                 className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
               >
-                0 (Nil/None)
+                0 (Nil)
               </button>
-              <button
-                type="button"
-                onClick={() => setAmountInput('150')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
-              >
-                150 (1 Mo)
-              </button>
-              <button
-                type="button"
-                onClick={() => setAmountInput('300')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
-              >
-                300 (2 Mo)
-              </button>
-              <button
-                type="button"
-                onClick={() => setAmountInput('450')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
-              >
-                450 (3 Mo)
-              </button>
-              <button
-                type="button"
-                onClick={() => setAmountInput('1000')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
-              >
-                1,000
-              </button>
-              <button
-                type="button"
-                onClick={() => setAmountInput('1500')}
-                className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
-              >
-                1,500
-              </button>
+              {is131 ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('300')}
+                    className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    300 (1 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('600')}
+                    className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    600 (2 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('900')}
+                    className="px-2 py-0.5 bg-amber-50 hover:bg-amber-100 text-amber-900 border border-amber-200 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    900 (3 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('3600')}
+                    className="px-2 py-0.5 bg-amber-100 hover:bg-amber-200 text-amber-950 font-bold text-[10px] rounded cursor-pointer transition-colors"
+                  >
+                    3,600 (12 Mo)
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('150')}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    150 (1 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('300')}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    300 (2 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('450')}
+                    className="px-2 py-0.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-semibold rounded cursor-pointer transition-colors"
+                  >
+                    450 (3 Mo)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setAmountInput('1800')}
+                    className="px-2 py-0.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-900 font-bold border border-emerald-200 text-[10px] rounded cursor-pointer transition-colors"
+                  >
+                    1,800 (12 Mo)
+                  </button>
+                </>
+              )}
             </div>
           </div>
 
