@@ -20,6 +20,7 @@ import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 import { MemberCollapsibleHistory } from './MemberCollapsibleHistory';
 import { EditMemberBalanceModal } from './EditMemberBalanceModal';
 import { AllMembersBalancePdfModal } from './AllMembersBalancePdfModal';
+import { MonthEndIntimationModal } from './MonthEndIntimationModal';
 import * as XLSX from 'xlsx';
 import {
   Users,
@@ -34,6 +35,7 @@ import {
   CheckCircle2,
   AlertCircle,
   Bell,
+  MessageSquare,
   Filter,
   ChevronDown,
   ChevronUp,
@@ -104,6 +106,9 @@ export const MembersTab: React.FC<MembersTabProps> = ({
 
   // All Members Balance PDF statement modal state
   const [isAllMembersBalancePdfModalOpen, setIsAllMembersBalancePdfModalOpen] = useState(false);
+
+  // Month-End Member Intimations Modal state
+  const [isMonthEndIntimationModalOpen, setIsMonthEndIntimationModalOpen] = useState(false);
 
   // Collapsible inline history state
   const [expandedLedgers, setExpandedLedgers] = useState<Record<string, boolean>>({});
@@ -924,6 +929,15 @@ export const MembersTab: React.FC<MembersTabProps> = ({
             </div>
 
             <button
+              onClick={() => setIsMonthEndIntimationModalOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-black rounded-lg transition-colors cursor-pointer shadow-xs"
+              title="Month-End Intimation Notice & WhatsApp Dispatcher"
+            >
+              <MessageSquare className="w-3.5 h-3.5 text-emerald-400" />
+              <span>Month-End Intimations</span>
+            </button>
+
+            <button
               onClick={() => setIsAllMembersBalancePdfModalOpen(true)}
               className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold text-white bg-emerald-700 hover:bg-emerald-800 rounded-lg transition-colors cursor-pointer shadow-xs"
               title="View full balance statement of all members & print PDF"
@@ -1589,6 +1603,16 @@ export const MembersTab: React.FC<MembersTabProps> = ({
           setSelectedBalanceMember(member);
           setIsEditBalanceModalOpen(true);
         }}
+        showToast={showToast}
+      />
+
+      {/* Month-End Member Intimation & Dispatcher Modal */}
+      <MonthEndIntimationModal
+        isOpen={isMonthEndIntimationModalOpen}
+        onClose={() => setIsMonthEndIntimationModalOpen(false)}
+        members={members}
+        transactions={transactions}
+        settings={settings || { organizationName }}
         showToast={showToast}
       />
     </div>

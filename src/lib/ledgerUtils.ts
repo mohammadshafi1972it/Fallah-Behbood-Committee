@@ -12,7 +12,8 @@ import {
   MemberBalanceItem,
   MonthEndMemberBalanceItem,
   YearSummaryItem,
-  MemberYearlySummary
+  MemberYearlySummary,
+  MonthEndIntimationSlip
 } from '../types';
 
 export const BASE_START_YEAR = 2019;
@@ -2299,5 +2300,420 @@ export function parseUniversalFileImport(
       sheetsParsed,
     },
   };
+}
+
+/**
+ * Builds a comprehensive Month-End Intimation Notice for a Member
+ * incorporating Opening Balance as on date, subsequent payments, dynamic Paid Upto,
+ * and pre-formatted WhatsApp intimation message in English & Urdu.
+ */
+export function buildMonthEndIntimationSlip(
+  member: Member,
+  transactions: Transaction[],
+  yearMonth: string,
+  settings: AppSettings
+): MonthEndIntimationSlip {
+  const lNo = String(member.ledgerNo || '').trim();
+  const rate = getMemberMonthlyDue(member);
+  const orgName = settings.organizationName || 'Fallah Behbood Committee';
+  const monthLabel = getMonthLabel(yearMonth);
+  const baselineDate = settings.baselineOpeningDate || '2026-08-31';
+
+  // Transactions up to end of selected month
+  const [yearStr, monthStr] = yearMonth.split('-');
+  const y = parseInt(yearStr, 10);
+  const m = parseInt(monthStr, 10);
+  const lastDayOfMonth = new Date(y, m, 0).getDate();
+  const monthEndISO = `${yearStr}-${String(m).padStart(2, '0')}-${String(lastDayOfMonth).padStart(2, '0')}`;
+
+  const allMemberTxns = transactions.filter(
+    (t) => t.type === 'Income' && String(t.ledgerNo || '').trim() === lNo
+  );
+
+  // Payments made specifically during this reporting month
+  const monthTxns = allMemberTxns.filter((t) => t.date && t.date.startsWith(yearMonth));
+  const subsequentPaymentsInMonth = monthTxns.reduce((s, t) => s + num(t.amount), 0);
+
+  // Payments made up to the end of this month
+  const txnsUpToMonthEnd = allMemberTxns.filter((t) => t.date && t.date <= monthEndISO);
+  const totalPaidToDate = txnsUpToMonthEnd.reduce((s, t) => s + num(t.amount), 0);
+
+  // Subsequent payments made after the baseline date up to month end
+  const subsequentTxns = allMemberTxns.filter(
+    (t) => t.date && t.date > baselineDate && t.date <= monthEndISO
+  );
+  const subsequentPaymentsTotal = subsequentTxns.reduce((s, t) => s + num(t.amount), 0);
+
+  // Opening Balance as on baseline date
+  const override = settings.memberBalanceOverrides ? settings.memberBalanceOverrides[lNo] : undefined;
+  let baselineOpeningBalance = 0;
+  let previousDue = 0;
+
+  if (override?.previousDue !== undefined) {
+    previousDue = num(override.previousDue);
+  } else if (member.previousDue !== undefined) {
+    previousDue = num(member.previousDue);
+  } else if (member.openingBalance !== undefined && member.openingBalance < 0) {
+    previousDue = Math.abs(num(member.openingBalance));
+  }
+
+  if (override?.openingBalance !== undefined) {
+    baselineOpeningBalance = num(override.openingBalance);
+  } else if (member.openingBalance !== undefined) {
+    baselineOpeningBalance = num(member.openingBalance);
+  } else if (previousDue > 0) {
+    baselineOpeningBalance = -previousDue;
+  }
+
+  // Calculate dynamic Paid Upto based on total available funds
+  const paidCalc = computePaidUptoInfo(
+    totalPaidToDate,
+    rate,
+    previousDue,
+    baselineOpeningBalance > 0 ? baselineOpeningBalance : 0
+  );
+
+  // Month Index from Sept 2026 (or calculated from yearMonth)
+  const monthIdx = getSessionMonthIndexFromSept2026(yearMonth);
+  const cumulativeDueForSession = monthIdx * rate;
+  const totalExpectedDue = previousDue + cumulativeDueForSession;
+
+  const showNil = override?.showNilBalanceWhenPaid ?? member.showNilBalanceWhenPaid ?? true;
+
+  // Effective mathematical balance
+  const effectiveBal = baselineOpeningBalance + totalPaidToDate - cumulativeDueForSession;
+
+  let closingBalance = effectiveBal;
+  let status: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active' = 'Active';
+
+  if (paidCalc.isFullYearPaid || (totalPaidToDate >= totalExpectedDue && showNil)) {
+    closingBalance = effectiveBal > 0 ? effectiveBal : 0;
+    status = effectiveBal > 0 ? 'Advance' : 'Paid Up (Nil)';
+  } else if (effectiveBal > 0) {
+    status = 'Advance';
+  } else if (effectiveBal < 0) {
+    status = 'Arrears';
+  } else if (totalPaidToDate > 0) {
+    status = 'Cleared';
+  }
+
+  // Construct bilingual WhatsApp message
+  const whatsappMessageText = `*${orgName.toUpperCase()} — PAMPORE*
+*MONTH-END MEMBER BALANCE INTIMATION*
+━━━━━━━━━━━━━━━━━━━━━━
+👤 *Member:* ${member.name}
+🔢 *Ledger No:* #${member.ledgerNo}
+📅 *Reporting Month:* ${monthLabel}
+💰 *Monthly Subscription Rate:* Rs. ${rate}/-
+
+📊 *ACCOUNT STATEMENT BREAKDOWN:*
+• *Opening Balance / Prev. Arrears (as on ${fmtDate(baselineDate)}):* ${baselineOpeningBalance >= 0 ? '+' : ''}${formatMoney(baselineOpeningBalance)}
+• *Subsequent Payments Received (This Month):* ${formatMoney(subsequentPaymentsInMonth)}
+• *Total Payments Received to Date:* ${formatMoney(totalPaidToDate)}
+• *Subscription Paid Upto:* ${paidCalc.paidUptoMonthName || paidCalc.paidUptoBadge}
+• *Current Closing Balance:* ${closingBalance === 0 && (paidCalc.isFullYearPaid || status === 'Paid Up (Nil)') ? 'Nil (Paid Up)' : closingBalance > 0 ? `+${formatMoney(closingBalance)} (Advance)` : `${formatMoney(closingBalance)} (Pending Due)`}
+
+${closingBalance < 0 ? `⚠️ *Pending Arrears:* Rs. ${Math.abs(closingBalance)}/-\nبراہ کرم فلاحی امور کی انجام دہی کے لیے اپنے واجبات جلد از جلد ادا فرمائیں۔` : `✅ *Status:* ${paidCalc.isFullYearPaid ? 'Full Session Cleared / Nil Due' : 'Up to date'}\nآپ کے تعاون اور بروقت ادائیگی کا بے حد شکریہ۔`}
+
+جزاکم اللہ خیراً و احسن الجزاء۔
+— انتظامیہ: *${orgName}*`;
+
+  return {
+    member,
+    ledgerNo: member.ledgerNo,
+    name: member.name,
+    phone: member.phone || '',
+    address: member.address || '',
+    monthlyRate: rate,
+    yearMonth,
+    monthLabel,
+    asOnDate: monthEndISO,
+    baselineOpeningBalance,
+    baselinePaidUptoMonth: 'August 2026',
+    subsequentPaymentsInMonth,
+    subsequentPaymentsTotal,
+    totalPaidToDate,
+    currentPaidUpto: paidCalc.paidUptoText,
+    currentPaidUptoBadge: paidCalc.paidUptoBadge,
+    isPaidUp: paidCalc.isFullYearPaid || status === 'Paid Up (Nil)',
+    isFullYearPaid: paidCalc.isFullYearPaid,
+    closingBalance,
+    status,
+    whatsappMessageText,
+  };
+}
+
+/**
+ * Print Individual High-Fidelity Month-End Intimation Slip
+ */
+export function printSingleIntimationSlipPDF(
+  slip: MonthEndIntimationSlip,
+  organizationName: string
+): void {
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+
+  const orgName = organizationName || 'Fallah Behbood Committee';
+  const is131 = isLedger131(slip.ledgerNo);
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <title>Month-End Intimation Slip — #${slip.ledgerNo} ${slip.name}</title>
+      <style>
+        @page { size: A5 landscape; margin: 8mm; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; margin: 0; padding: 12px; font-size: 9.5pt; }
+        .slip-box { border: 2px solid #1e293b; border-radius: 8px; padding: 14px; background: #ffffff; }
+        .header { text-align: center; border-bottom: 2px solid #b8863b; padding-bottom: 6px; margin-bottom: 10px; }
+        .header h1 { margin: 0; font-size: 15pt; color: #1F3A5F; font-family: Georgia, serif; text-transform: uppercase; }
+        .header p { margin: 2px 0 0; font-size: 9pt; color: #475569; }
+        .header .slip-title { font-size: 9pt; font-weight: bold; color: #b8863b; margin-top: 3px; letter-spacing: 0.5px; text-transform: uppercase; }
+        
+        .member-info { display: flex; justify-content: space-between; background: #f8fafc; border: 1px solid #e2e8f0; padding: 8px 12px; border-radius: 6px; margin-bottom: 10px; }
+        .info-col { flex: 1; }
+        .info-lbl { font-size: 7.5pt; text-transform: uppercase; color: #64748b; font-weight: bold; }
+        .info-val { font-size: 11pt; font-weight: bold; color: #0f172a; }
+        
+        table { width: 100%; border-collapse: collapse; margin-top: 6px; font-size: 9pt; }
+        th, td { border: 1px solid #cbd5e1; padding: 6px 8px; text-align: left; }
+        th { background: #1e293b; color: white; font-size: 8pt; text-transform: uppercase; }
+        
+        .closing-banner { margin-top: 10px; padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between; align-items: center; }
+        .closing-banner.advance { background: #dcfce7; border: 1px solid #86efac; color: #166534; }
+        .closing-banner.paidup { background: #ccfbf1; border: 1px solid #5eead4; color: #0f766e; }
+        .closing-banner.arrears { background: #fee2e2; border: 1px solid #fca5a5; color: #991b1b; }
+        
+        .sig-section { display: flex; justify-content: space-between; margin-top: 25px; padding-top: 10px; font-size: 8.5pt; }
+        .sig-box { text-align: center; width: 140px; }
+        .sig-line { border-top: 1px dashed #64748b; margin-top: 30px; padding-top: 3px; font-weight: 600; }
+      </style>
+    </head>
+    <body>
+      <div class="slip-box">
+        <div class="header">
+          <h1>${orgName}</h1>
+          <p>Pampore, Kashmir • Monthly Member Intimation & Balance Slip</p>
+          <div class="slip-title">MONTH-END ACCOUNT STATEMENT — ${slip.monthLabel.toUpperCase()}</div>
+        </div>
+
+        <div class="member-info">
+          <div class="info-col">
+            <div class="info-lbl">Member Name & Details</div>
+            <div class="info-val">${slip.name}</div>
+            <div style="font-size:8pt; color:#64748b;">${slip.phone ? `📱 ${slip.phone}` : ''} ${slip.address ? `• ${slip.address}` : ''}</div>
+          </div>
+          <div class="info-col" style="text-align:right;">
+            <div class="info-lbl">Ledger Folio No.</div>
+            <div class="info-val" style="font-family:monospace; color:${is131 ? '#b45309' : '#0f172a'};">
+              #${slip.ledgerNo} ${is131 ? '<span style="font-size:8pt; background:#fef3c7; color:#92400e; padding:1px 4px; border-radius:3px;">@300</span>' : ''}
+            </div>
+            <div style="font-size:8pt; color:#64748b;">Rate: ${formatMoney(slip.monthlyRate)}/month</div>
+          </div>
+        </div>
+
+        <table>
+          <thead>
+            <tr>
+              <th>Description / Account Head</th>
+              <th style="text-align:right;">Amount (Rs.)</th>
+              <th>Status / Remarks</th>
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td><strong>Opening Balance / Previous Arrears</strong> (as on 31/08/2026)</td>
+              <td style="text-align:right; font-family:monospace; font-weight:bold; color:${slip.baselineOpeningBalance < 0 ? '#b91c1c' : '#047857'};">
+                ${slip.baselineOpeningBalance >= 0 ? '+' : ''}${formatMoney(slip.baselineOpeningBalance)}
+              </td>
+              <td>${slip.baselineOpeningBalance < 0 ? 'Carried forward Arrears' : slip.baselineOpeningBalance > 0 ? 'Advance Credit' : 'Nil'}</td>
+            </tr>
+            <tr>
+              <td><strong>Subsequent Payment(s) Received in ${slip.monthLabel}</strong></td>
+              <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">
+                +${formatMoney(slip.subsequentPaymentsInMonth)}
+              </td>
+              <td>Credited to Ledger Account</td>
+            </tr>
+            <tr>
+              <td><strong>Cumulative Payments Received to Date</strong></td>
+              <td style="text-align:right; font-family:monospace; font-weight:bold; color:#0f172a;">
+                ${formatMoney(slip.totalPaidToDate)}
+              </td>
+              <td>Total Receipts Audited</td>
+            </tr>
+            <tr style="background:#f8fafc;">
+              <td><strong>Subscription Paid Upto Month</strong></td>
+              <td style="text-align:center; font-weight:bold; color:#0f766e;" colspan="2">
+                ${slip.currentPaidUptoBadge} (${slip.currentPaidUpto})
+              </td>
+            </tr>
+          </tbody>
+        </table>
+
+        <div class="closing-banner ${slip.status === 'Advance' ? 'advance' : slip.status === 'Paid Up (Nil)' ? 'paidup' : 'arrears'}">
+          <div>
+            <strong style="font-size:10pt;">Closing Balance as of ${slip.monthLabel} End:</strong>
+            <div style="font-size:8pt; margin-top:2px;">${slip.status === 'Paid Up (Nil)' ? 'Full session cleared — Nil balance' : slip.status === 'Advance' ? 'Advance amount credited for next months' : 'Pending payment requested'}</div>
+          </div>
+          <div style="text-align:right; font-size:12pt; font-weight:bold; font-family:monospace;">
+            ${slip.status === 'Paid Up (Nil)' ? 'NIL (PAID UP)' : formatMoney(slip.closingBalance)}
+          </div>
+        </div>
+
+        <div class="sig-section">
+          <div class="sig-box">
+            <div class="sig-line">Member Signature</div>
+          </div>
+          <div class="sig-box">
+            <div class="sig-line">Cashier / Collector</div>
+          </div>
+          <div class="sig-box">
+            <div class="sig-line">General Secretary / Treasurer</div>
+          </div>
+        </div>
+      </div>
+      <script>window.onload = function() { window.print(); };</script>
+    </body>
+    </html>
+  `;
+
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+}
+
+/**
+ * Print Batch Month-End Intimation Slips (3 per A4 page with cut borders)
+ */
+export function printBatchMonthEndIntimationsPDF(
+  slips: MonthEndIntimationSlip[],
+  organizationName: string,
+  yearMonth: string
+): void {
+  if (!slips || slips.length === 0) return;
+
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) return;
+
+  const orgName = organizationName || 'Fallah Behbood Committee';
+  const monthLabel = getMonthLabel(yearMonth);
+
+  const slipsHtml = slips
+    .map((slip, idx) => {
+      const is131 = isLedger131(slip.ledgerNo);
+      return `
+        <div class="slip-container">
+          <div class="slip-header">
+            <div style="font-weight:bold; font-size:10pt; color:#1F3A5F; font-family:Georgia, serif;">${orgName} — PAMPORE</div>
+            <div style="font-size:7.5pt; font-weight:bold; color:#b8863b;">MONTH-END MEMBER INTIMATION SLIP • ${monthLabel.toUpperCase()}</div>
+          </div>
+
+          <div class="slip-grid">
+            <div>
+              <span class="lbl">Member Name:</span> <strong>${slip.name}</strong>
+              <div style="font-size:7pt; color:#64748b;">${slip.phone ? `📱 ${slip.phone}` : ''}</div>
+            </div>
+            <div style="text-align:right;">
+              <span class="lbl">Ledger No:</span> <strong style="font-family:monospace; font-size:9.5pt;">#${slip.ledgerNo}</strong>
+              <div style="font-size:7pt; color:#64748b;">Rate: ${formatMoney(slip.monthlyRate)}/M</div>
+            </div>
+          </div>
+
+          <table class="slip-table">
+            <tr>
+              <td>Opening Balance (as on 31/08/2026)</td>
+              <td style="text-align:right; font-family:monospace; font-weight:600;">${slip.baselineOpeningBalance >= 0 ? '+' : ''}${formatMoney(slip.baselineOpeningBalance)}</td>
+            </tr>
+            <tr>
+              <td>Paid in ${monthLabel}</td>
+              <td style="text-align:right; font-family:monospace; font-weight:bold; color:#065f46;">+${formatMoney(slip.subsequentPaymentsInMonth)}</td>
+            </tr>
+            <tr>
+              <td>Total Paid to Date</td>
+              <td style="text-align:right; font-family:monospace; font-weight:bold;">${formatMoney(slip.totalPaidToDate)}</td>
+            </tr>
+            <tr style="background:#f1f5f9;">
+              <td><strong>Paid Upto</strong></td>
+              <td style="text-align:right; font-weight:bold; color:#0f766e;">${slip.currentPaidUptoBadge}</td>
+            </tr>
+            <tr style="background:${slip.status === 'Paid Up (Nil)' ? '#f0fdfa' : slip.status === 'Advance' ? '#f0fdf4' : '#fef2f2'}; font-weight:bold;">
+              <td>Month-End Balance</td>
+              <td style="text-align:right; font-family:monospace;">
+                ${slip.status === 'Paid Up (Nil)' ? 'NIL (PAID UP)' : formatMoney(slip.closingBalance)}
+              </td>
+            </tr>
+          </table>
+
+          <div class="slip-sig">
+            <span>Treasurer Sign: _______________</span>
+            <span>Date: ${fmtDate(slip.asOnDate)}</span>
+          </div>
+        </div>
+      `;
+    })
+    .join('');
+
+  const html = `
+    <!DOCTYPE html>
+    <html lang="en">
+    <head>
+      <meta charset="utf-8"/>
+      <title>Batch Month-End Intimation Slips — ${monthLabel}</title>
+      <style>
+        @page { size: A4 portrait; margin: 8mm; }
+        body { font-family: 'Helvetica Neue', Arial, sans-serif; color: #0f172a; margin: 0; padding: 0; font-size: 8pt; }
+        .slips-wrapper { display: flex; flex-direction: column; gap: 8px; }
+        .slip-container { border: 1.5px dashed #475569; border-radius: 6px; padding: 8px 10px; background: #ffffff; page-break-inside: avoid; height: 86mm; box-sizing: border-box; display: flex; flex-direction: column; justify-content: space-between; }
+        .slip-header { text-align: center; border-bottom: 1px solid #b8863b; padding-bottom: 3px; margin-bottom: 4px; }
+        .slip-grid { display: flex; justify-content: space-between; margin-bottom: 4px; font-size: 8pt; }
+        .lbl { color: #64748b; font-size: 7pt; text-transform: uppercase; }
+        
+        .slip-table { width: 100%; border-collapse: collapse; font-size: 7.5pt; }
+        .slip-table td { border: 1px solid #cbd5e1; padding: 3px 5px; }
+        
+        .slip-sig { display: flex; justify-content: space-between; font-size: 7pt; color: #475569; margin-top: 4px; border-top: 1px dotted #cbd5e1; padding-top: 3px; }
+      </style>
+    </head>
+    <body>
+      <div class="slips-wrapper">
+        ${slipsHtml}
+      </div>
+      <script>window.onload = function() { window.print(); };</script>
+    </body>
+    </html>
+  `;
+
+  printWindow.document.open();
+  printWindow.document.write(html);
+  printWindow.document.close();
+}
+
+/**
+ * Snapshot payments made so far as Opening Balance as on date and calculate baseline Paid Upto.
+ */
+export function snapshotPaymentsAsOpeningBalance(
+  members: Member[],
+  transactions: Transaction[],
+  asOfDate: string
+): Member[] {
+  return members.map((m) => {
+    const lNo = String(m.ledgerNo || '').trim();
+    const rate = getMemberMonthlyDue(m);
+
+    // Sum all payments up to asOfDate
+    const memberTxns = transactions.filter(
+      (t) => t.type === 'Income' && String(t.ledgerNo || '').trim() === lNo && t.date <= asOfDate
+    );
+    const totalPaidBeforeCutoff = memberTxns.reduce((s, t) => s + num(t.amount), 0);
+
+    return {
+      ...m,
+      openingBalance: totalPaidBeforeCutoff,
+      previousDue: 0,
+      updatedAt: new Date().toISOString(),
+    };
+  });
 }
 

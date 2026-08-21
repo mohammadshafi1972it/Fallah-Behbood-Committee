@@ -122,6 +122,7 @@ export interface AppSettings {
   linkedGoogleSheetId?: string;
   linkedGoogleSheetName?: string;
   lastSyncedAt?: string;
+  baselineOpeningDate?: string; // e.g. "2026-08-31" or custom baseline cutoff date
   monthBalances?: MonthBalanceOverrides;
   defaultShowNilBalanceWhenPaid?: boolean;
   memberBalanceOverrides?: Record<
@@ -142,6 +143,30 @@ export interface StorageStatus {
   googleUserEmail?: string;
   lastSyncedAt?: string;
   syncing?: boolean;
+}
+
+export interface MonthEndIntimationSlip {
+  member: Member;
+  ledgerNo: string;
+  name: string;
+  phone: string;
+  address: string;
+  monthlyRate: number;
+  yearMonth: string; // YYYY-MM
+  monthLabel: string;
+  asOnDate: string; // YYYY-MM-DD
+  baselineOpeningBalance: number;
+  baselinePaidUptoMonth: string;
+  subsequentPaymentsInMonth: number;
+  subsequentPaymentsTotal: number;
+  totalPaidToDate: number;
+  currentPaidUpto: string;
+  currentPaidUptoBadge: string;
+  isPaidUp: boolean;
+  isFullYearPaid: boolean;
+  closingBalance: number; // Positive = Advance, Negative = Arrears, 0 = Nil/Cleared
+  status: 'Paid Up (Nil)' | 'Advance' | 'Arrears' | 'Cleared' | 'Active';
+  whatsappMessageText: string;
 }
 
 export interface YearSummaryItem {

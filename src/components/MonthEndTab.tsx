@@ -34,6 +34,7 @@ import { SendReminderModal, OverdueMemberItem } from './SendReminderModal';
 import { MonthBalanceReportModal } from './MonthBalanceReportModal';
 import { ManualMonthBalanceModal } from './ManualMonthBalanceModal';
 import { ConsolidatedMonthEndMemberModal } from './ConsolidatedMonthEndMemberModal';
+import { MonthEndIntimationModal } from './MonthEndIntimationModal';
 import { Users, FileText } from 'lucide-react';
 
 interface MonthEndTabProps {
@@ -105,9 +106,16 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
   const [isConsolidatedModalOpen, setIsConsolidatedModalOpen] = useState(false);
   const [targetConsolidatedMonthRow, setTargetConsolidatedMonthRow] = useState<MonthBalanceTableRow | null>(null);
 
+  // Month-End Member Intimations & WhatsApp Dispatcher Modal
+  const [isIntimationModalOpen, setIsIntimationModalOpen] = useState(false);
+
   const handleOpenConsolidatedReport = (row: MonthBalanceTableRow) => {
     setTargetConsolidatedMonthRow(row);
     setIsConsolidatedModalOpen(true);
+  };
+
+  const handleOpenIntimations = () => {
+    setIsIntimationModalOpen(true);
   };
 
   const memberContributions = useMemo(() => {
@@ -232,6 +240,16 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* Member Month-End Intimations & WhatsApp Dispatcher */}
+          <button
+            onClick={handleOpenIntimations}
+            className="inline-flex items-center gap-2 px-3.5 py-2 text-xs font-bold text-white bg-slate-900 hover:bg-black rounded-lg transition-all shadow-2xs cursor-pointer"
+            title="Dispatch Month-End Intimation Notices & Slips to Members"
+          >
+            <MessageSquare className="w-4 h-4 text-emerald-400" />
+            <span>Member Month-End Intimations & Slips</span>
+          </button>
+
           {/* Consolidated Member Balance List for Selected Month */}
           <button
             onClick={() => handleOpenConsolidatedReport(currentMonthRow)}
@@ -840,6 +858,17 @@ export const MonthEndTab: React.FC<MonthEndTabProps> = ({
         members={members}
         transactions={transactions}
         settings={settings}
+        showToast={showToast}
+      />
+
+      {/* Month-End Member Intimations & WhatsApp Dispatcher Modal */}
+      <MonthEndIntimationModal
+        isOpen={isIntimationModalOpen}
+        onClose={() => setIsIntimationModalOpen(false)}
+        members={members}
+        transactions={transactions}
+        settings={settings}
+        defaultMonth={selectedMonth}
         showToast={showToast}
       />
     </div>
